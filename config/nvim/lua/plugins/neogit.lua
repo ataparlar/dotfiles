@@ -12,6 +12,16 @@ return {
     "nvim-telescope/telescope.nvim", -- optional
   },
   cmd = "Neogit",
+  opts = function()
+    return {
+      environment = {
+        NVIM = vim.v.servername or vim.env.NVIM,
+      },
+      commit_editor = {
+        kind = "auto",
+      },
+    }
+  end,
   init = function()
     require("git").setup()
   end,
