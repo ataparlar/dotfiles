@@ -26,6 +26,7 @@ source /usr/share/zsh-theme-powerlevel10k/powerlevel10k.zsh-theme
 alias hconf="nvim ~/projects/dotfiles/config/hypr/hyprland.conf"
 alias wayconf="nvim ~/projects/dotfiles/config/waybar/config.jsonc"
 alias waystyle="nvim ~/projects/dotfiles/config/waybar/style.css"
+alias vimz="nvim ~/projects/dotfiles/zshrc"
 
 
 # Force the bridge between Intel (card1) and NVIDIA (card2)
