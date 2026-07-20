@@ -1,3 +1,8 @@
 [user]
-	name = ataparlar
 	email = ataparlars5@gmail.com
+	name = Ata Parlar
+[filter "lfs"]
+	process = git-lfs filter-process
+	required = true
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
