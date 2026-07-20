@@ -1,0 +1,10 @@
+# Exclude sensitive host credentials
+config/gh/hosts.yml
+
+# Swap/backup/temp files
+*~
+*.swp
+*.swo
+
+# OS/system files
+.DS_Store
