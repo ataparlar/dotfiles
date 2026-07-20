@@ -118,3 +118,7 @@ POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true
 export PATH="$HOME/.local/bin:$PATH"
 
 alias ccc="cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && make -j16 && ../merge_compile_commands.sh"
+
+
+# Added by Antigravity CLI installer
+export PATH="/home/devv/.local/bin:$PATH"
