@@ -1,3 +1,20 @@
-# Zsh Aliases for devv container environment
+# Zsh Aliases for user environment
 # Add your custom aliases here.
-# Any changes made here are immediately reflected in the container.
+
+# Config editing aliases
+alias hconf="nvim ~/.config/hypr/hyprland.conf"
+alias wayconf="nvim ~/.config/waybar/config.jsonc"
+alias waystyle="nvim ~/.config/waybar/style.css"
+
+# Reload waybar and Hyprland
+alias rld='killall waybar && hyprctl reload'
+
+# Docker environments
+alias ataparlar-dev='docker exec -it ataparlar-dev zsh'
+alias arch-dev='docker exec -it arch_dev zsh'
+
+# SSH
+alias figserver='ssh ataparlar@204.168.181.37'
+
+# CMake / build helper
+alias ccc="cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && make -j16 && ../merge_compile_commands.sh"

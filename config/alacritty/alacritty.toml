@@ -1,0 +1,14 @@
+[general]
+import = [
+    "~/.config/alacritty/themes/themes/enfocado_light.toml"
+]
+
+[font]
+size = 9.0
+normal = { family = "MesloLGS NF", style = "Regular" }
+
+[terminal]
+[terminal.shell]
+program = "/bin/zsh"
+args = ["--login"]
+
