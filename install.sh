@@ -85,3 +85,4 @@ backup_and_link "$DOTFILES_DIR/config/nvim" "$HOME/.config/nvim"
 backup_and_link "$DOTFILES_DIR/config/gh/config.yml" "$HOME/.config/gh/config.yml"
 
 echo "=== Dotfiles installation complete! ==="
+

@@ -117,4 +117,57 @@ POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true
 # Added by Antigravity CLI installer
 export PATH="$HOME/.local/bin:$PATH"
 
-alias ccc="cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && make -j16 && ../merge_compile_commands.sh"
+# ==========================================
+# ROS (Robot Operating System) Configuration
+# ==========================================
+if [ -f /opt/ros/noetic/setup.zsh ]; then
+    source /opt/ros/noetic/setup.zsh
+fi
+
+export ROS_HOSTNAME=localhost
+export ROS_MASTER_URI=http://localhost:11311
+export DISABLE_ROS1_EOL_WARNINGS=1
+
+# ROS Workspace sourcing helper function
+sws() {
+    if [ -z "$1" ]; then
+        echo "Available ROS workspaces:"
+        if [ -d "$HOME/projects" ]; then
+            ls -1 "$HOME/projects" | grep -E "_ws|ws_" || true
+        fi
+        return 0
+    fi
+    local ws_path=""
+    if [ -d "$HOME/projects/$1" ]; then
+        ws_path="$HOME/projects/$1"
+    elif [ -d "$HOME/projects/${1}_ws" ]; then
+        ws_path="$HOME/projects/${1}_ws"
+    elif [ -d "$HOME/projects/ws_$1" ]; then
+        ws_path="$HOME/projects/ws_$1"
+    fi
+
+    if [ -n "$ws_path" ] && [ -f "$ws_path/devel/setup.zsh" ]; then
+        source "$ws_path/devel/setup.zsh"
+        echo "✓ Sourced ROS workspace: $ws_path"
+    else
+        echo "✗ Error: Workspace '$1' not found or setup.zsh missing."
+    fi
+}
+
+# ==========================================
+# FZF (Fuzzy Finder) Configuration
+# ==========================================
+if [ -f /usr/share/doc/fzf/examples/key-bindings.zsh ]; then
+    source /usr/share/doc/fzf/examples/key-bindings.zsh
+fi
+if [ -f /usr/share/doc/fzf/examples/completion.zsh ]; then
+    source /usr/share/doc/fzf/examples/completion.zsh
+fi
+
+# ==========================================
+# Local Configuration (Secrets & Overrides)
+# ==========================================
+if [ -f "$HOME/.zshrc.local" ]; then
+    source "$HOME/.zshrc.local"
+fi
+

@@ -7,4 +7,4 @@ if !has("clipboard") && executable("wl-copy") && executable("wl-paste")
   nnoremap p :let @" = system("wl-paste --no-newline")<CR>p
   nnoremap P :let @" = system("wl-paste --no-newline")<CR>P
   vnoremap p :<C-u>let @" = system("wl-paste --no-newline")<CR>gv"0p
-  endif
+endif

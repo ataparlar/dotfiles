@@ -1,3 +1,17 @@
 # Zsh Aliases for devv container environment
 # Add your custom aliases here.
 # Any changes made here are immediately reflected in the container.
+
+# ROS development aliases
+alias catbu_c="catkin build --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1"
+alias catbu_cc="catbu_c && ./merge_compile_commands.sh"
+
+# CMake compilation commands helper
+alias ccc="cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && make -j16 && ../merge_compile_commands.sh"
+
+# General utility aliases
+alias ls="ls --color=auto"
+alias ll="ls -alF"
+alias la="ls -A"
+alias l="ls -CF"
+alias grep="grep --color=auto"
