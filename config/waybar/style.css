@@ -285,6 +285,23 @@ window#waybar.hidden {
     border-color: rgba(243, 139, 168, 0.5);
 }
 
+#custom-terminal {
+    background: rgba(49, 50, 68, 0.8);
+    border-radius: 6px;
+    margin: 2px 4px 2px 0px;
+    padding: 3px 8px;
+    color: #89b4fa;
+    border: 1px solid rgba(137, 180, 250, 0.25);
+    font-size: 13px;
+    transition: all 0.3s ease;
+}
+
+#custom-terminal:hover {
+    background: linear-gradient(135deg, rgba(137, 180, 250, 0.3), rgba(116, 199, 236, 0.3));
+    border-color: rgba(137, 180, 250, 0.5);
+    color: #b4befe;
+}
+
 /* Tooltip styling */
 tooltip {
     background: linear-gradient(135deg, rgba(30, 30, 46, 0.98), rgba(24, 24, 37, 0.98));

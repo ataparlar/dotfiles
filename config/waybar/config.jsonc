@@ -7,6 +7,7 @@
     "margin-left": 6,
     "margin-right": 6,
     "modules-left": [
+        "custom/terminal",
         "hyprland/workspaces",
         "hyprland/submap",
         "hyprland/window"
@@ -28,6 +29,13 @@
         "battery",
         "custom/power"
     ],
+
+    "custom/terminal": {
+        "format": "",
+        "tooltip": true,
+        "tooltip-format": "Launch Alacritty Terminal",
+        "on-click": "alacritty"
+    },
 
     "hyprland/workspaces": {
         "disable-scroll": true,

@@ -1,0 +1,14 @@
+# Monitor configuration
+# Single screen setup:
+# - If an external monitor is connected, use that monitor and disable laptop display (eDP-1)
+# - If no external monitor is connected, use laptop display (eDP-1)
+
+# Fallback rule for any connected external monitor
+monitor = , preferred, auto, 1
+
+# Default rule for laptop display
+monitor = eDP-1, preferred, auto, 1
+
+# Automatically manage single active screen on start / reload and monitor hotplug events
+exec = ~/.config/hypr/scripts/monitors.py
+
