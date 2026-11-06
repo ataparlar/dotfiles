@@ -8,7 +8,7 @@
     "margin-right": 6,
     "modules-left": [
         "custom/terminal",
-        "hyprland/workspaces",
+        "ext/workspaces",
         "hyprland/submap",
         "hyprland/window"
     ],
@@ -37,8 +37,15 @@
         "on-click": "alacritty"
     },
 
+    "ext/workspaces": {
+        "format": "{name}",
+        "on-click": "activate",
+        "all-outputs": false,
+        "sort-by-name": true
+    },
+
     "hyprland/workspaces": {
-        "disable-scroll": true,
+        "disable-scroll": false,
         "all-outputs": false,
         "format": "{name}"
 

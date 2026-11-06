@@ -30,8 +30,9 @@ alias vimz="nvim ~/projects/dotfiles/zshrc"
 alias blender="prime-run blender"
 
 
-# Force the bridge between Intel (card1) and NVIDIA (card2)
-export WLR_DRM_DEVICES=/dev/dri/card1:/dev/dri/card2
+# Force Intel (primary) and secondary GPU
+export AQ_DRM_DEVICES=/dev/dri/card1:/dev/dri/card0
+export WLR_DRM_DEVICES=/dev/dri/card1:/dev/dri/card0
 
 # Get into containers
 alias ataparlar-dev='docker exec -it ataparlar-dev zsh'
@@ -60,3 +61,8 @@ export PATH="/home/ataparlar/.bin/fig_dev/scripts:$PATH"
 export CUDA_HOME=/opt/cuda
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="/home/ataparlar/.bin/devv-web/scripts:$PATH"
+export PATH="/home/ataparlar/.bin/lovus-dev/scripts:$PATH"
+
+# opencode
+export PATH=/home/ataparlar/.opencode/bin:$PATH
