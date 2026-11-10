@@ -33,6 +33,7 @@ list_themes() {
     echo ""
     echo "To switch theme:"
     echo "  $0 <theme-name>"
+    echo "  $0 <theme-name> --all   (also switch desktop task manager)"
     echo "=========================================="
 }
 
@@ -62,4 +63,19 @@ if killall -SIGUSR2 waybar 2>/dev/null; then
     echo "Applied theme '$THEME_NAME' and reloaded Waybar successfully."
 else
     echo "Applied theme '$THEME_NAME'. (Waybar is not currently running)"
+fi
+
+# Sync with waybar-ycal if requested
+if [ "$2" = "--all" ] || [ "$2" = "-a" ]; then
+    YCAL_SWITCHER="$HOME/.config/waybar-ycal/switch-theme.sh"
+    if [ -x "$YCAL_SWITCHER" ]; then
+        case "$THEME_NAME" in
+            neutral-dark-grey)
+                "$YCAL_SWITCHER" dark-pastel-grey-green
+                ;;
+            catppuccin-mocha)
+                "$YCAL_SWITCHER" catppuccin-mocha
+                ;;
+        esac
+    fi
 fi
