@@ -13,8 +13,7 @@
         "hyprland/window"
     ],
     "modules-center": [
-        "clock",
-        "custom/gcal"
+        "custom/ycal"
     ],
     "modules-right": [
         "disk",
@@ -76,6 +75,13 @@
         "return-type": "json",
         "exec": "/home/ataparlar/.gemini/tmp/hypr/waybar-gcal.py",
         "interval": 600
+    },
+
+    "custom/ycal": {
+        "exec": "/home/ataparlar/.config/waybar-ycal/bar.py",
+        "on-click": "/home/ataparlar/.config/waybar-ycal/toggle.sh",
+        "interval": 60,
+        "return-type": "json"
     },
 
     "clock": {

@@ -316,3 +316,53 @@ tooltip label {
     padding: 2px;
     font-size: 10px; /* Reset to original bar font size */
 }
+
+#custom-ycal {
+    color: #f9e2af;
+    background: linear-gradient(135deg, rgba(137, 180, 250, 0.2), rgba(116, 199, 236, 0.2));
+    border-radius: 0 6px 6px 0;
+    margin: 2px 4px 2px 0;
+    padding: 4px 10px;
+    border: 1px solid rgba(137, 180, 250, 0.3);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    transition: all 0.3s ease;
+}
+
+#custom-ycal:hover {
+    background: linear-gradient(135deg, rgba(137, 180, 250, 0.3), rgba(116, 199, 236, 0.3));
+    border-color: rgba(137, 180, 250, 0.5);
+}
+
+#custom-ycal.has-events {
+    color: #a6e3a1;
+}
+
+/* If custom-ycal is the only child in center */
+#custom-ycal:only-child {
+    border-radius: 6px;
+    margin: 2px 4px;
+}
+
+/* If clock is the only child in center */
+#clock:only-child {
+    border-radius: 6px;
+    margin: 2px 4px;
+    border-right: 1px solid rgba(137, 180, 250, 0.3);
+}
+
+/* If placed in modules-right as a system module */
+.modules-right #custom-ycal {
+    background: rgba(49, 50, 68, 0.8);
+    border-radius: 5px;
+    margin: 2px 1px;
+    padding: 4px 6px;
+    color: #f9e2af;
+    border: 1px solid rgba(205, 214, 244, 0.05);
+    font-weight: 500;
+}
+
+.modules-right #custom-ycal:hover {
+    background: linear-gradient(135deg, rgba(166, 227, 161, 0.2), rgba(148, 226, 213, 0.2));
+    border-color: rgba(166, 227, 161, 0.4);
+}
