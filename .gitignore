@@ -1,5 +1,11 @@
 # Exclude sensitive host credentials
 config/gh/hosts.yml
+config/waybar-ycal/credentials.json
+config/waybar-ycal/client_secret*.json
+config/waybar-ycal/*.pid
+config/waybar-ycal/__pycache__/
+*.pid
+__pycache__/
 
 # Swap/backup/temp files
 *~

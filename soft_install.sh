@@ -92,5 +92,10 @@ backup_and_link "$DOTFILES_DIR/config/gh/config.yml" "$HOME/.config/gh/config.ym
 backup_and_link "$DOTFILES_DIR/config/alacritty" "$HOME/.config/alacritty"
 backup_and_link "$DOTFILES_DIR/config/swappy" "$HOME/.config/swappy"
 backup_and_link "$DOTFILES_DIR/config/nwg-displays" "$HOME/.config/nwg-displays"
+backup_and_link "$DOTFILES_DIR/config/waybar-ycal" "$HOME/.config/waybar-ycal"
+
+# Link systemd user services
+backup_and_link "$DOTFILES_DIR/config/systemd/user/waybar-ycal.service" "$HOME/.config/systemd/user/waybar-ycal.service"
+backup_and_link "$DOTFILES_DIR/config/systemd/user/waybar-ycal-bg.service" "$HOME/.config/systemd/user/waybar-ycal-bg.service"
 
 echo "=== Dotfiles soft installation complete! ==="
