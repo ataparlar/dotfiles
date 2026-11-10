@@ -37,12 +37,31 @@ list_themes() {
     echo "=========================================="
 }
 
-if [ -z "$1" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+SYNC_ALL=0
+THEME_NAME=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --all|-a)
+            SYNC_ALL=1
+            ;;
+        -h|--help)
+            list_themes
+            exit 0
+            ;;
+        *)
+            if [ -z "$THEME_NAME" ]; then
+                THEME_NAME="$arg"
+            fi
+            ;;
+    esac
+done
+
+if [ -z "$THEME_NAME" ]; then
     list_themes
     exit 0
 fi
 
-THEME_NAME="$1"
 # Strip .css extension if provided
 THEME_NAME="${THEME_NAME%.css}"
 THEME_SRC="$THEMES_DIR/${THEME_NAME}.css"
@@ -66,7 +85,7 @@ else
 fi
 
 # Sync with waybar-ycal if requested
-if [ "$2" = "--all" ] || [ "$2" = "-a" ]; then
+if [ "$SYNC_ALL" -eq 1 ]; then
     YCAL_SWITCHER="$HOME/.config/waybar-ycal/switch-theme.sh"
     if [ -x "$YCAL_SWITCHER" ]; then
         case "$THEME_NAME" in
