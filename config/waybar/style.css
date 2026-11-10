@@ -1,7 +1,9 @@
-/* Modern Aesthetic Waybar Theme - 50% Scaled (Readable Fonts) */
+/* Modern Aesthetic Waybar Theme - Neutral Dark Grey
+ * Cohesive with desktop background calendar & task dashboard
+ */
 * {
     font-family: "JetBrains Mono", "SF Pro Display", "Helvetica Neue", sans-serif;
-    font-size: 10px; /* Bumped up from 7px */
+    font-size: 10px;
     font-weight: 500;
     border: none;
     border-radius: 0;
@@ -9,17 +11,17 @@
 }
 
 window#waybar {
-    background: linear-gradient(135deg, rgba(30, 30, 46, 0.85), rgba(24, 24, 37, 0.85));
+    background: linear-gradient(135deg, rgba(22, 24, 29, 0.94), rgba(18, 19, 23, 0.94));
     border-radius: 8px;
-    border: 1px solid rgba(205, 214, 244, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     margin: 4px;
     padding: 2px 4px;
     transition: all 0.3s ease;
 }
 
 window#waybar:hover {
-    background: linear-gradient(135deg, rgba(30, 30, 46, 0.95), rgba(24, 24, 37, 0.95));
-    border-color: rgba(205, 214, 244, 0.25);
+    background: linear-gradient(135deg, rgba(26, 28, 34, 0.96), rgba(20, 22, 26, 0.96));
+    border-color: rgba(255, 255, 255, 0.14);
 }
 
 window#waybar.hidden {
@@ -28,54 +30,52 @@ window#waybar.hidden {
 
 /* Left modules */
 /* --- ENTIRE WORKSPACES SECTION --- */
- #workspaces {
+#workspaces {
     padding: 0 2px;
-    border: 1px solid rgba(205, 214, 244, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 #workspaces button {
-    /* padding: 3px 6px; */
     font-size: 15px;
     margin: 1px;
-    color: rgba(205, 214, 244, 0.6);
+    color: rgba(226, 232, 240, 0.55);
     background: transparent;
-    /* border-radius: 4px; */
     transition: all 0.3s ease;
     font-weight: bold;
     border: 1px solid transparent;
 }
 
 #workspaces button.active {
-    background: linear-gradient(135deg, #89b4fa, #74c7ec);
-    color: #1e1e2e;
-    border-color: rgba(137, 180, 250, 0.3);
+    background: linear-gradient(135deg, #38bdf8, #0284c7);
+    color: #0f172a;
+    border-color: rgba(56, 189, 248, 0.4);
 }
 
 #workspaces button.urgent {
-    background: linear-gradient(135deg, #f38ba8, #eba0ac);
-    color: #1e1e2e;
+    background: linear-gradient(135deg, #f43f5e, #fb7185);
+    color: #0f172a;
     animation: urgent 1s ease-in-out infinite alternate;
 }
 
 @keyframes urgent {
-    from { background: rgba(243, 139, 168, 0.3); }
-    to { background: rgba(243, 139, 168, 0.6); }
+    from { background: rgba(244, 63, 94, 0.3); }
+    to { background: rgba(244, 63, 94, 0.6); }
 }
 
 #window {
-    background: linear-gradient(135deg, rgba(49, 50, 68, 0.8), rgba(40, 42, 54, 0.8));
+    background: rgba(34, 37, 44, 0.85);
     border-radius: 6px;
     margin: 2px 4px;
     padding: 4px 8px;
-    color: #cdd6f4;
-    border: 1px solid rgba(205, 214, 244, 0.1);
+    color: #e2e8f0;
+    border: 1px solid rgba(255, 255, 255, 0.07);
     font-weight: 500;
     transition: all 0.3s ease;
 }
 
 #window:hover {
-    background: linear-gradient(135deg, rgba(49, 50, 68, 0.9), rgba(40, 42, 54, 0.9));
-    border-color: rgba(205, 214, 244, 0.2);
+    background: rgba(42, 46, 54, 0.92);
+    border-color: rgba(255, 255, 255, 0.14);
 }
 
 #window.empty {
@@ -84,32 +84,32 @@ window#waybar.hidden {
 }
 
 #submap {
-    background: rgba(243, 139, 168, 0.2);
+    background: rgba(244, 63, 94, 0.2);
     border-radius: 6px;
     margin: 2px 4px;
     padding: 4px 8px;
-    color: #f38ba8;
-    border: 1px solid rgba(243, 139, 168, 0.3);
+    color: #f43f5e;
+    border: 1px solid rgba(244, 63, 94, 0.35);
     font-weight: bold;
 }
 
 /* Center module */
 #clock {
-    background: linear-gradient(135deg, rgba(137, 180, 250, 0.2), rgba(116, 199, 236, 0.2));
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.18), rgba(37, 99, 235, 0.18));
     border-radius: 6px 0 0 6px;
     margin: 2px 0 2px 4px;
     padding: 5px 12px;
-    color: #cdd6f4;
-    border: 1px solid rgba(137, 180, 250, 0.3);
+    color: #e2e8f0;
+    border: 1px solid rgba(56, 189, 248, 0.3);
     border-right: none;
     font-weight: 700;
-    font-size: 10px; /* Bumped up from 8px */
+    font-size: 10px;
     transition: all 0.3s ease;
 }
 
 #clock:hover {
-    background: linear-gradient(135deg, rgba(137, 180, 250, 0.3), rgba(116, 199, 236, 0.3));
-    border-color: rgba(137, 180, 250, 0.5);
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.28), rgba(37, 99, 235, 0.28));
+    border-color: rgba(56, 189, 248, 0.5);
 }
 
 /* Right modules */
@@ -122,13 +122,14 @@ window#waybar.hidden {
 #network,
 #bluetooth,
 #battery,
-#custom-power {
-    background: rgba(49, 50, 68, 0.8);
+#custom-power,
+#disk {
+    background: rgba(34, 37, 44, 0.85);
     border-radius: 5px;
     margin: 2px 1px;
     padding: 4px 6px;
-    color: #cdd6f4;
-    border: 1px solid rgba(205, 214, 244, 0.05);
+    color: #e2e8f0;
+    border: 1px solid rgba(255, 255, 255, 0.06);
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -142,7 +143,7 @@ window#waybar.hidden {
 
 #tray > .needs-attention {
     -gtk-icon-effect: highlight;
-    background-color: rgba(243, 139, 168, 0.2);
+    background-color: rgba(244, 63, 94, 0.2);
 }
 
 /* Module hover effects */
@@ -153,12 +154,13 @@ window#waybar.hidden {
 #pulseaudio:hover,
 #network:hover,
 #bluetooth:hover,
-#battery:hover {
-    background: linear-gradient(135deg, rgba(166, 227, 161, 0.2), rgba(148, 226, 213, 0.2));
-    border-color: rgba(166, 227, 161, 0.4);
+#battery:hover,
+#disk:hover {
+    background: rgba(45, 49, 58, 0.95);
+    border-color: rgba(255, 255, 255, 0.16);
 }
 
-/* Specific module colors */
+/* Specific module colors matching background palette */
 #cpu {
     color: #fab387;
 }
@@ -168,44 +170,43 @@ window#waybar.hidden {
 }
 
 #custom-gcal {
-    color: #f9e2af;
-    background: linear-gradient(135deg, rgba(137, 180, 250, 0.2), rgba(116, 199, 236, 0.2));
+    color: #fbbf24;
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.18), rgba(37, 99, 235, 0.18));
     border-radius: 0 6px 6px 0;
     margin: 2px 4px 2px 0;
     padding: 4px 10px;
-    border: 1px solid rgba(137, 180, 250, 0.3);
-    /* border-left: none; */
+    border: 1px solid rgba(56, 189, 248, 0.3);
     font-weight: 600;
 }
 
 #custom-gcal:hover {
-    background: linear-gradient(135deg, rgba(137, 180, 250, 0.3), rgba(116, 199, 236, 0.3));
-    border-color: rgba(137, 180, 250, 0.5);
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.28), rgba(37, 99, 235, 0.28));
+    border-color: rgba(56, 189, 248, 0.5);
 }
 
 #cpu.warning {
-    color: #f9e2af;
-    background: rgba(249, 226, 175, 0.1);
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
 }
 
 #cpu.critical {
-    color: #f38ba8;
-    background: rgba(243, 139, 168, 0.1);
+    color: #f43f5e;
+    background: rgba(244, 63, 94, 0.15);
     animation: blink 0.5s linear infinite alternate;
 }
 
 #memory {
-    color: #cba6f7;
+    color: #74c7ec;
 }
 
 #memory.warning {
-    color: #f9e2af;
-    background: rgba(249, 226, 175, 0.1);
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
 }
 
 #memory.critical {
-    color: #f38ba8;
-    background: rgba(243, 139, 168, 0.1);
+    color: #f43f5e;
+    background: rgba(244, 63, 94, 0.15);
     animation: blink 0.5s linear infinite alternate;
 }
 
@@ -214,26 +215,26 @@ window#waybar.hidden {
 }
 
 #pulseaudio.muted {
-    color: #f38ba8;
-    background: rgba(243, 139, 168, 0.1);
+    color: #f43f5e;
+    background: rgba(244, 63, 94, 0.12);
 }
 
 #network {
-    color: #74c7ec;
+    color: #38bdf8;
 }
 
 #network.disconnected {
-    color: #f38ba8;
-    background: rgba(243, 139, 168, 0.1);
+    color: #f43f5e;
+    background: rgba(244, 63, 94, 0.12);
 }
 
 #bluetooth {
-    color: #89b4fa;
+    color: #60a5fa;
 }
 
 #bluetooth.disabled,
 #bluetooth.off {
-    color: rgba(205, 214, 244, 0.4);
+    color: rgba(226, 232, 240, 0.4);
 }
 
 #battery {
@@ -242,96 +243,96 @@ window#waybar.hidden {
 
 #battery.charging,
 #battery.plugged {
-    color: #f9e2af;
-    background: rgba(249, 226, 175, 0.1);
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
 }
 
 #battery.critical:not(.charging) {
-    background: rgba(243, 139, 168, 0.15);
-    color: #f38ba8;
+    background: rgba(244, 63, 94, 0.18);
+    color: #f43f5e;
     animation: blink 0.5s linear infinite alternate;
 }
 
 #battery.warning:not(.charging) {
-    color: #f9e2af;
-    background: rgba(249, 226, 175, 0.1);
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
 }
 
 @keyframes blink {
     to {
-        background-color: rgba(243, 139, 168, 0.3);
+        background-color: rgba(244, 63, 94, 0.35);
         color: #ffffff;
     }
 }
 
 #idle_inhibitor {
-    color: #cba6f7;
+    color: #38bdf8;
 }
 
 #idle_inhibitor.activated {
-    background: rgba(203, 166, 247, 0.15);
-    color: #cba6f7;
+    background: rgba(56, 189, 248, 0.18);
+    color: #38bdf8;
 }
 
 #custom-power {
-    color: #f38ba8;
-    font-size: 13px; /* Bumped up from 8px */
-    background: linear-gradient(135deg, rgba(243, 139, 168, 0.2), rgba(235, 160, 172, 0.2));
-    border-color: rgba(243, 139, 168, 0.3);
+    color: #f43f5e;
+    font-size: 13px;
+    background: linear-gradient(135deg, rgba(244, 63, 94, 0.2), rgba(225, 29, 72, 0.2));
+    border-color: rgba(244, 63, 94, 0.35);
 }
 
 #custom-power:hover {
-    background: linear-gradient(135deg, rgba(243, 139, 168, 0.3), rgba(235, 160, 172, 0.3));
-    border-color: rgba(243, 139, 168, 0.5);
+    background: linear-gradient(135deg, rgba(244, 63, 94, 0.32), rgba(225, 29, 72, 0.32));
+    border-color: rgba(244, 63, 94, 0.55);
 }
 
 #custom-terminal {
-    background: rgba(49, 50, 68, 0.8);
+    background: rgba(34, 37, 44, 0.85);
     border-radius: 6px;
     margin: 2px 4px 2px 0px;
     padding: 3px 8px;
-    color: #89b4fa;
-    border: 1px solid rgba(137, 180, 250, 0.25);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.25);
     font-size: 13px;
     transition: all 0.3s ease;
 }
 
 #custom-terminal:hover {
-    background: linear-gradient(135deg, rgba(137, 180, 250, 0.3), rgba(116, 199, 236, 0.3));
-    border-color: rgba(137, 180, 250, 0.5);
-    color: #b4befe;
+    background: rgba(45, 49, 58, 0.95);
+    border-color: rgba(56, 189, 248, 0.5);
+    color: #74c7ec;
 }
 
 /* Tooltip styling */
 tooltip {
-    background: linear-gradient(135deg, rgba(30, 30, 46, 0.98), rgba(24, 24, 37, 0.98));
-    border: 2px solid rgba(255, 255, 255, 0.8);
+    background: rgba(22, 24, 29, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 10px;
-    color: #cdd6f4;
+    color: #f8fafc;
     padding: 8px;
 }
 
 tooltip label {
-    color: #cdd6f4;
+    color: #f8fafc;
     padding: 2px;
-    font-size: 10px; /* Reset to original bar font size */
+    font-size: 10px;
 }
 
 #custom-ycal {
-    color: #f9e2af;
-    background: linear-gradient(135deg, rgba(137, 180, 250, 0.2), rgba(116, 199, 236, 0.2));
+    color: #fbbf24;
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.18), rgba(37, 99, 235, 0.18));
     border-radius: 0 6px 6px 0;
     margin: 2px 4px 2px 0;
     padding: 4px 10px;
-    border: 1px solid rgba(137, 180, 250, 0.3);
+    border: 1px solid rgba(56, 189, 248, 0.3);
     font-weight: 600;
     letter-spacing: 0.5px;
     transition: all 0.3s ease;
 }
 
 #custom-ycal:hover {
-    background: linear-gradient(135deg, rgba(137, 180, 250, 0.3), rgba(116, 199, 236, 0.3));
-    border-color: rgba(137, 180, 250, 0.5);
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.28), rgba(37, 99, 235, 0.28));
+    border-color: rgba(56, 189, 248, 0.5);
 }
 
 #custom-ycal.has-events {
@@ -348,21 +349,21 @@ tooltip label {
 #clock:only-child {
     border-radius: 6px;
     margin: 2px 4px;
-    border-right: 1px solid rgba(137, 180, 250, 0.3);
+    border-right: 1px solid rgba(56, 189, 248, 0.3);
 }
 
 /* If placed in modules-right as a system module */
 .modules-right #custom-ycal {
-    background: rgba(49, 50, 68, 0.8);
+    background: rgba(34, 37, 44, 0.85);
     border-radius: 5px;
     margin: 2px 1px;
     padding: 4px 6px;
-    color: #f9e2af;
-    border: 1px solid rgba(205, 214, 244, 0.05);
+    color: #fbbf24;
+    border: 1px solid rgba(255, 255, 255, 0.06);
     font-weight: 500;
 }
 
 .modules-right #custom-ycal:hover {
-    background: linear-gradient(135deg, rgba(166, 227, 161, 0.2), rgba(148, 226, 213, 0.2));
-    border-color: rgba(166, 227, 161, 0.4);
+    background: rgba(45, 49, 58, 0.95);
+    border-color: rgba(255, 255, 255, 0.16);
 }
