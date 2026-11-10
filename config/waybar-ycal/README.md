@@ -1,4 +1,4 @@
-# Waybar Ycal + Hyprland Background Task Manager
+# hypr-ycal (Waybar Ycal + Hyprland Background Task Manager)
 
 An interactive desktop productivity suite for Wayland / Hyprland and Waybar, combining:
 1. **Desktop Background Dashboard (`bg.py`)**: An always-on, interactive Google Calendar & Google Tasks dashboard running on Hyprland's background layer (`gtk4-layer-shell`).
