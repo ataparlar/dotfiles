@@ -71,15 +71,31 @@ def _run_sync():
 
         service = build('calendar', 'v3', credentials=creds)
         today = datetime.date.today()
-        time_min = (today - datetime.timedelta(days=60)).isoformat() + 'T00:00:00Z'
-        time_max = (today + datetime.timedelta(days=365)).isoformat() + 'T23:59:59Z'
+        # Fetch from 1 year past to 2 years future to cover academic calendars, deadlines, and events
+        time_min = (today - datetime.timedelta(days=365)).isoformat() + 'T00:00:00Z'
+        time_max = (today + datetime.timedelta(days=730)).isoformat() + 'T23:59:59Z'
 
-        # Fetch from all calendars
+        # Fetch all calendars from Google Calendar
         cal_list = service.calendarList().list().execute()
-        calendar_ids = [c['id'] for c in cal_list.get('items', [])]
+        raw_cals = cal_list.get('items', [])
+        calendars_data = []
+        for c in raw_cals:
+            calendars_data.append({
+                'id': c['id'],
+                'summary': c.get('summary', '(Untitled Calendar)'),
+                'description': c.get('description', ''),
+                'color': c.get('backgroundColor', '#94baa6'),
+                'fg_color': c.get('foregroundColor', '#000000'),
+                'selected': bool(c.get('selected', False)),
+                'primary': bool(c.get('primary', False)),
+                'access_role': c.get('accessRole', 'reader'),
+            })
 
         events_by_date = {}
-        for cal_id in calendar_ids:
+        for cal in calendars_data:
+            cal_id = cal['id']
+            cal_summary = cal['summary']
+            cal_color = cal['color']
             try:
                 result = service.events().list(
                     calendarId=cal_id,
@@ -87,25 +103,63 @@ def _run_sync():
                     timeMax=time_max,
                     singleEvents=True,
                     orderBy='startTime',
-                    maxResults=500,
+                    maxResults=2500,
                 ).execute()
-            except Exception:
+            except Exception as e:
+                print(f"[gcal sync calendar error: {cal_summary}] {e}", file=sys.stderr)
                 continue
+
             for item in result.get('items', []):
-                start = item['start']
-                end = item['end']
+                start = item.get('start', {})
+                end = item.get('end', {})
                 title = item.get('summary', '(no title)')
+                location = item.get('location', '')
+                description = item.get('description', '')
+                html_link = item.get('htmlLink', '')
+
                 if 'dateTime' in start:
                     dt = datetime.datetime.fromisoformat(start['dateTime'])
-                    dt_end = datetime.datetime.fromisoformat(end['dateTime'])
-                    label = f"{title} {dt.strftime('%H:%M')}-{dt_end.strftime('%H:%M')}"
-                    events_by_date.setdefault(dt.date().isoformat(), []).append(label)
-                else:
+                    dt_end = datetime.datetime.fromisoformat(end.get('dateTime', start['dateTime']))
+                    time_str = f"{dt.strftime('%H:%M')}-{dt_end.strftime('%H:%M')}"
+                    ev_item = {
+                        'type': 'event',
+                        'id': item.get('id', ''),
+                        'cal_id': cal_id,
+                        'cal_summary': cal_summary,
+                        'cal_color': cal_color,
+                        'title': title,
+                        'time': time_str,
+                        'start': start['dateTime'],
+                        'end': end.get('dateTime', ''),
+                        'location': location,
+                        'description': description,
+                        'html_link': html_link,
+                    }
+                    events_by_date.setdefault(dt.date().isoformat(), []).append(ev_item)
+                elif 'date' in start:
                     d = datetime.date.fromisoformat(start['date'])
-                    d_end = datetime.date.fromisoformat(end['date'])
-                    while d < d_end:
-                        events_by_date.setdefault(d.isoformat(), []).append(title)
-                        d += datetime.timedelta(days=1)
+                    d_end = datetime.date.fromisoformat(end.get('date', start['date']))
+                    ev_item = {
+                        'type': 'event',
+                        'id': item.get('id', ''),
+                        'cal_id': cal_id,
+                        'cal_summary': cal_summary,
+                        'cal_color': cal_color,
+                        'title': title,
+                        'time': 'All day',
+                        'start': start['date'],
+                        'end': end.get('date', ''),
+                        'location': location,
+                        'description': description,
+                        'html_link': html_link,
+                    }
+                    if d == d_end:
+                        events_by_date.setdefault(d.isoformat(), []).append(ev_item)
+                    else:
+                        cur = d
+                        while cur < d_end:
+                            events_by_date.setdefault(cur.isoformat(), []).append(ev_item)
+                            cur += datetime.timedelta(days=1)
 
         # Fetch Google Tasks with subtask hierarchy, due dates, times, and notes
         tasks_service = build('tasks', 'v1', credentials=creds)
@@ -192,6 +246,7 @@ def _run_sync():
         cache_data = {
             'events': events_by_date,
             'task_lists': task_lists_data,
+            'calendars': calendars_data,
         }
 
         os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
@@ -250,14 +305,25 @@ def load_data():
             with open(CACHE_FILE) as f:
                 data = json.load(f)
                 if isinstance(data, dict) and 'events' in data:
-                    return data.get('events', {}), data.get('task_lists', [])
-                return data, []
+                    return data.get('events', {}), data.get('task_lists', []), data.get('calendars', [])
+                return data, [], []
         except Exception:
             pass
-    return {}, []
+    return {}, [], []
+
+def load_calendars():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE) as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data.get('calendars', [])
+        except Exception:
+            pass
+    return []
 
 def load_events():
-    events, _ = load_data()
+    events, _, _ = load_data()
     return events
 
 
@@ -294,7 +360,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
         self.year = self.today.year
         self.month = self.today.month
         self.selected_date = self.today
-        self.events, self.task_lists = load_data()
+        self.events, self.task_lists, self.calendars = load_data()
         self._selected_btn = None
         self._cred_poll_timer = None
         self._tasks_visible = True
@@ -322,7 +388,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
                 GLib.idle_add(self._reload_ui)
 
     def _reload_ui(self):
-        self.events, self.task_lists = load_data()
+        self.events, self.task_lists, self.calendars = load_data()
         self._build_grid()
         self._update_day_panel(self.selected_date)
         self._build_task_lists()
@@ -382,7 +448,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
         self.year = self.today.year
         self.month = self.today.month
         self.selected_date = self.today
-        self.events, self.task_lists = load_data()
+        self.events, self.task_lists, self.calendars = load_data()
 
     def _show_calendar(self):
         self.set_child(self.root_overlay)
@@ -660,8 +726,8 @@ class CalendarPopup(Gtk.ApplicationWindow):
             number.set_valign(Gtk.Align.CENTER)
             overlay.set_child(number)
 
-            has_events = any(isinstance(e, str) for e in day_events)
-            has_tasks = any(isinstance(e, dict) and not e.get('done') for e in day_events)
+            has_events = any(isinstance(e, str) or (isinstance(e, dict) and e.get('type') == 'event') for e in day_events)
+            has_tasks = any(isinstance(e, dict) and e.get('type') == 'task' and not e.get('done') for e in day_events)
 
             if has_events or has_tasks:
                 bar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
@@ -715,7 +781,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
         """Build a single event or task row for the day panel."""
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
 
-        if isinstance(ev, dict):
+        if isinstance(ev, dict) and (ev.get('type') == 'task' or 'lid' in ev):
             # Task row: dot, title button with time/notes, done toggle
             done = ev.get('done', False)
             is_sub = bool(ev.get('parent'))
@@ -765,13 +831,48 @@ class CalendarPopup(Gtk.ApplicationWindow):
             toggle.add_css_class('done-toggle-active' if done else 'done-toggle-inactive')
             toggle.connect("clicked", self._on_task_toggle, ev)
             row.append(toggle)
+        elif isinstance(ev, dict) and ev.get('type') == 'event':
+            cal_color = ev.get('cal_color', '#94baa6')
+            cal_name = ev.get('cal_summary', 'Event')
+            title = ev.get('title', '(no title)')
+            time_str = ev.get('time', '')
+            time_part = f"<span alpha='75%' size='small'>{html.escape(time_str)}</span>  " if time_str else ""
+
+            # Colored dot
+            dot = Gtk.Label()
+            dot.set_markup(f"<span foreground='{cal_color}'>●</span>")
+            row.append(dot)
+
+            # Title & Time button
+            title_btn = Gtk.Button()
+            title_btn.add_css_class('task-title-btn')
+            title_btn.set_hexpand(True)
+
+            label = Gtk.Label()
+            label.set_halign(Gtk.Align.START)
+            label.set_ellipsize(Pango.EllipsizeMode.END)
+            label.add_css_class('event-name')
+            label.set_markup(f"{time_part}<span foreground='{cal_color}' size='smaller'><b>[{html.escape(cal_name)}]</b></span> {html.escape(title)}")
+            title_btn.set_child(label)
+            if ev.get('html_link'):
+                title_btn.connect("clicked", lambda *_, url=ev['html_link']: subprocess.Popen(['xdg-open', url]))
+            row.append(title_btn)
+
+            tooltip_lines = [f"{cal_name}: {title}"]
+            if time_str:
+                tooltip_lines.append(f"Time: {time_str}")
+            if ev.get('location'):
+                tooltip_lines.append(f"Location: {ev['location']}")
+            if ev.get('description'):
+                tooltip_lines.append(f"Description:\n{ev['description']}")
+            row.set_tooltip_text("\n".join(tooltip_lines))
         else:
             # Event row: accent dot + title
             dot = Gtk.Label(label="•")
             dot.add_css_class('event-dot')
-            name = Gtk.Label(label=ev)
+            name = Gtk.Label(label=str(ev))
             name.set_ellipsize(Pango.EllipsizeMode.END)
-            name.set_tooltip_text(ev)
+            name.set_tooltip_text(str(ev))
             name.add_css_class('event-name')
             row.append(dot)
             row.append(name)
@@ -792,10 +893,11 @@ class CalendarPopup(Gtk.ApplicationWindow):
                 break
             self.events_box.remove(child)
 
-        # Sort order: undone tasks (0) → done tasks (1) → events (2)
+        raw_events = self.events.get(date.isoformat(), [])
+        # Sort order: undone tasks (0) → events (1) → done tasks (2)
         day_events = sorted(
-            self.events.get(date.isoformat(), []),
-            key=lambda e: 0 if (isinstance(e, dict) and not e.get('done')) else (1 if isinstance(e, dict) else 2)
+            raw_events,
+            key=lambda e: 0 if (isinstance(e, dict) and e.get('type') == 'task' and not e.get('done')) else (2 if (isinstance(e, dict) and e.get('type') == 'task' and e.get('done')) else 1)
         )
         if day_events:
             for ev in day_events:
@@ -837,7 +939,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
                 ).execute()
                 _run_sync()
                 def after():
-                    self.events, self.task_lists = load_data()
+                    self.events, self.task_lists, self.calendars = load_data()
                     self._build_grid()
                     self._update_day_panel(self.selected_date)
                     self._build_task_lists()
@@ -1207,7 +1309,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
                 service.tasks().insert(tasklist=lid, body={'title': title}).execute()
                 _run_sync()
                 def after():
-                    self.events, self.task_lists = load_data()
+                    self.events, self.task_lists, self.calendars = load_data()
                     self._build_grid()
                     self._update_day_panel(self.selected_date)
                     self._build_task_lists()
@@ -1663,7 +1765,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
                     self.dialog_save_btn.remove_css_class('pulsing')
                     self.dialog_save_btn.set_sensitive(True)
                     self.close_task_dialog()
-                    self.events, self.task_lists = load_data()
+                    self.events, self.task_lists, self.calendars = load_data()
                     self._build_grid()
                     self._update_day_panel(self.selected_date)
                     self._build_task_lists()
@@ -1701,7 +1803,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
                     self.dialog_delete_btn.remove_css_class('pulsing')
                     self.dialog_delete_btn.set_sensitive(True)
                     self.close_task_dialog()
-                    self.events, self.task_lists = load_data()
+                    self.events, self.task_lists, self.calendars = load_data()
                     self._build_grid()
                     self._update_day_panel(self.selected_date)
                     self._build_task_lists()
@@ -1761,7 +1863,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
                     self._refresh_spin_timer = None
                 self._refresh_angle = 0.0
                 self._refresh_da.queue_draw()
-                self.events, self.task_lists = load_data()
+                self.events, self.task_lists, self.calendars = load_data()
                 self._build_grid()
                 self._update_day_panel(self.selected_date)
                 self._build_task_lists()

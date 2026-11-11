@@ -29,6 +29,7 @@ from popup import (
     hex_to_rgb_float,
     hex_to_rgba,
     load_data,
+    load_calendars,
     load_events,
     NERD_FONT,
     SCOPES,
@@ -47,7 +48,20 @@ DEFAULT_CONFIG = {
     "calendar_today_split": "50/50",
     "task_panels_fill_rest": True,
     "task_panel_min_width": 260,
+    "visible_calendars": None,
+    "show_tasks_on_calendar": True,
 }
+
+def make_color_dot(hex_color, size=7):
+    da = Gtk.DrawingArea()
+    da.set_size_request(size, size)
+    r, g, b = hex_to_rgb_float(hex_color or '#94baa6')
+    def draw(area, cr, width, height):
+        cr.set_source_rgb(r, g, b)
+        cr.arc(width / 2.0, height / 2.0, min(width, height) / 2.0, 0, 2 * math.pi)
+        cr.fill()
+    da.set_draw_func(draw)
+    return da
 
 DEFAULT_THEME = {
     "name": "dark-pastel-grey-green",
@@ -195,10 +209,18 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.year = self.today.year
         self.month = self.today.month
         self.selected_date = self.today
-        self.events, self.task_lists = load_data()
+        self.events, self.task_lists, self.calendars = load_data()
         self.current_theme = load_theme()
         self.config = load_config()
         self.cal_width = self._calc_calendar_width()
+
+        # Visible calendars filtering
+        self.visible_calendars = self.config.get('visible_calendars')
+        if self.visible_calendars is None:
+            self.visible_calendars = [c['id'] for c in self.calendars if c.get('selected', False)]
+            if not self.visible_calendars:
+                self.visible_calendars = [c['id'] for c in self.calendars]
+        self.show_tasks_on_calendar = self.config.get('show_tasks_on_calendar', True)
 
         self._selected_btn = None
         self._collapsed_parents = set()
@@ -212,6 +234,64 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self._setup_window()
         self._apply_css()
         self._build_ui()
+
+    def get_event_count_for_calendar(self, cal_id):
+        count = 0
+        for day_items in self.events.values():
+            for it in day_items:
+                if isinstance(it, dict) and it.get('type') == 'event' and it.get('cal_id') == cal_id:
+                    count += 1
+        return count
+
+    def is_calendar_visible(self, cal_id):
+        if self.visible_calendars is None:
+            return True
+        return cal_id in self.visible_calendars
+
+    def is_item_visible(self, item):
+        if isinstance(item, dict) and item.get('type') == 'task':
+            return getattr(self, 'show_tasks_on_calendar', True)
+        if isinstance(item, dict) and item.get('type') == 'event':
+            return self.is_calendar_visible(item.get('cal_id'))
+        return True
+
+    def toggle_calendar(self, cal_id):
+        if self.visible_calendars is None:
+            self.visible_calendars = [c['id'] for c in self.calendars]
+        if cal_id in self.visible_calendars:
+            self.visible_calendars.remove(cal_id)
+        else:
+            self.visible_calendars.append(cal_id)
+        self._save_visible_calendars()
+
+    def _set_all_calendars_visible(self, visible):
+        if visible:
+            self.visible_calendars = [c['id'] for c in self.calendars]
+        else:
+            self.visible_calendars = []
+        self._save_visible_calendars()
+
+    def _save_visible_calendars(self):
+        self.config['visible_calendars'] = list(self.visible_calendars)
+        self.config['show_tasks_on_calendar'] = getattr(self, 'show_tasks_on_calendar', True)
+        try:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except Exception as e:
+            print(f"Error saving config: {e}", file=sys.stderr)
+        self._build_calendar_chips()
+        self._build_grid()
+        self._update_agenda_card(self.selected_date)
+        self._update_stats_pills()
+        if hasattr(self, 'cal_dialog_scrim') and self.cal_dialog_scrim.get_visible():
+            self._populate_calendars_dialog()
+
+    def open_calendars_dialog(self):
+        self._populate_calendars_dialog()
+        self.cal_dialog_scrim.set_visible(True)
+
+    def close_calendars_dialog(self):
+        self.cal_dialog_scrim.set_visible(False)
 
     def _calc_calendar_width(self):
         val = self.config.get('calendar_width', 680)
@@ -246,10 +326,13 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         Gtk4LayerShell.set_exclusive_zone(self, -1)
         Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
 
-        # Escape closes dialog if open
+        # Escape closes dialogs if open
         key_ctrl = Gtk.EventControllerKey()
         def on_key(ctrl, keyval, keycode, state):
             if keyval == 65307:  # Escape
+                if hasattr(self, 'cal_dialog_scrim') and self.cal_dialog_scrim.get_visible():
+                    self.close_calendars_dialog()
+                    return True
                 if hasattr(self, 'dialog_scrim') and self.dialog_scrim.get_visible():
                     self.close_task_dialog()
                     return True
@@ -292,8 +375,9 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         # ── Right Column: Kanban Task Boards (Vibrant colors) ──────────
         self._build_task_boards(content_box)
 
-        # ── Modal Task Creation/Edit Dialog ───────────────────────────
+        # ── Modal Dialogs ─────────────────────────────────────────────
         self._build_task_dialog()
+        self._build_calendars_dialog()
 
     def _build_header_bar(self):
         hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -335,9 +419,18 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.lists_pill.add_css_class('status-pill')
         self.lists_pill.add_css_class('pill-lists')
 
+        self.cals_pill = Gtk.Button()
+        self.cals_pill.add_css_class('status-pill')
+        self.cals_pill.add_css_class('pill-cals')
+        self.cals_pill.set_tooltip_text("Manage Google Calendars")
+        self.cals_pill_label = Gtk.Label()
+        self.cals_pill.set_child(self.cals_pill_label)
+        self.cals_pill.connect("clicked", lambda *_: self.open_calendars_dialog())
+
         stats_box.append(self.due_pill)
         stats_box.append(self.pending_pill)
         stats_box.append(self.lists_pill)
+        stats_box.append(self.cals_pill)
         hdr.append(stats_box)
 
         # Right Action Buttons
@@ -388,7 +481,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
     def _update_stats_pills(self):
         today_iso = datetime.date.today().isoformat()
         today_items = self.events.get(today_iso, [])
-        due_today_tasks = sum(1 for item in today_items if isinstance(item, dict) and not item.get('done'))
+        due_today_tasks = sum(1 for item in today_items if isinstance(item, dict) and item.get('type') == 'task' and not item.get('done'))
 
         total_pending = 0
         for tl in self.task_lists:
@@ -402,10 +495,14 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
             total_pending += count_p(tl.get('tasks', []))
 
         lists_count = len(self.task_lists)
+        total_cals = len(getattr(self, 'calendars', []))
+        active_cals = len(self.visible_calendars) if self.visible_calendars is not None else total_cals
 
         self.due_pill.set_markup(f"<b>📌 {due_today_tasks}</b> Due Today")
         self.pending_pill.set_markup(f"<b>📋 {total_pending}</b> Pending")
         self.lists_pill.set_markup(f"<b>📁 {lists_count}</b> Lists")
+        if hasattr(self, 'cals_pill_label'):
+            self.cals_pill_label.set_markup(f"<b>📅 {active_cals}/{total_cals}</b> Calendars")
 
     def _build_calendar_card(self):
         self.calendar_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -414,7 +511,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.calendar_card.set_vexpand(True)
         self.left_col.append(self.calendar_card)
 
-        # Header: Prev, Month Label, Next, Today button
+        # Header: Prev, Month Label, Next, Today button, Calendars button
         hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         prev_btn = Gtk.Button(label="‹")
         prev_btn.add_css_class('nav-btn')
@@ -435,17 +532,67 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         today_btn.add_css_class('pill-btn')
         today_btn.connect("clicked", self._on_today_clicked)
 
+        cals_btn = Gtk.Button(label="Calendars ▾")
+        cals_btn.add_css_class('pill-btn')
+        cals_btn.set_tooltip_text("Manage Google Calendars")
+        cals_btn.connect("clicked", lambda _: self.open_calendars_dialog())
+
         hdr.append(prev_btn)
         hdr.append(self.month_label)
         hdr.append(next_btn)
         hdr.append(today_btn)
+        hdr.append(cals_btn)
         self.calendar_card.append(hdr)
+
+        # Quick calendar filter chips
+        self.cal_chips_scroll = Gtk.ScrolledWindow()
+        self.cal_chips_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        self.cal_chips_scroll.set_size_request(-1, 30)
+        self.cal_chips_scroll.set_vexpand(False)
+        self.cal_chips_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.cal_chips_scroll.set_child(self.cal_chips_box)
+        self.calendar_card.append(self.cal_chips_scroll)
+        self._build_calendar_chips()
 
         self.grid_container = Gtk.Box()
         self.grid_container.set_vexpand(True)
         self.grid_container.set_hexpand(True)
         self.calendar_card.append(self.grid_container)
         self._build_grid()
+
+    def _build_calendar_chips(self):
+        while True:
+            child = self.cal_chips_box.get_first_child()
+            if child is None:
+                break
+            self.cal_chips_box.remove(child)
+
+        for c in getattr(self, 'calendars', []):
+            cal_id = c['id']
+            is_vis = self.is_calendar_visible(cal_id)
+            color = c.get('color', '#94baa6')
+            name = c.get('summary', 'Calendar')
+
+            btn = Gtk.Button()
+            btn.add_css_class('cal-chip')
+            if not is_vis:
+                btn.add_css_class('cal-chip-inactive')
+
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            dot = make_color_dot(color, size=7)
+            dot.set_valign(Gtk.Align.CENTER)
+            box.append(dot)
+
+            lbl = Gtk.Label(label=name)
+            lbl.set_valign(Gtk.Align.CENTER)
+            box.append(lbl)
+
+            btn.set_child(box)
+            ev_count = self.get_event_count_for_calendar(cal_id)
+            status = "Visible" if is_vis else "Hidden"
+            btn.set_tooltip_text(f"{name} ({status})\n{ev_count} events • Click to toggle")
+            btn.connect("clicked", lambda _, cid=cal_id: self.toggle_calendar(cid))
+            self.cal_chips_box.append(btn)
 
     def _build_grid(self):
         while True:
@@ -480,7 +627,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
 
         for i in range(total_days):
             date = start + datetime.timedelta(days=i)
-            day_events = self.events.get(date.isoformat(), [])
+            day_events = [e for e in self.events.get(date.isoformat(), []) if self.is_item_visible(e)]
 
             overlay = Gtk.Overlay()
             overlay.set_hexpand(True)
@@ -492,25 +639,42 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
             number.set_valign(Gtk.Align.CENTER)
             overlay.set_child(number)
 
-            has_events = any(isinstance(e, str) for e in day_events)
-            has_tasks = any(isinstance(e, dict) and not e.get('done') for e in day_events)
+            cal_events = [e for e in day_events if (isinstance(e, str) or (isinstance(e, dict) and e.get('type') == 'event'))]
+            task_events = [e for e in day_events if isinstance(e, dict) and e.get('type') == 'task' and not e.get('done')]
+
+            has_events = bool(cal_events)
+            has_tasks = bool(task_events)
 
             if has_events or has_tasks:
                 bar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
                 bar_box.set_halign(Gtk.Align.CENTER)
                 bar_box.set_valign(Gtk.Align.END)
                 bar_box.set_margin_bottom(4)
-                w = 12 if (has_events and has_tasks) else 20
+
                 if has_tasks:
                     task_bar = Gtk.Box()
                     task_bar.add_css_class('task-bar')
-                    task_bar.set_size_request(w, 3)
+                    task_bar.set_size_request(8 if has_events else 18, 3)
                     bar_box.append(task_bar)
+
                 if has_events:
-                    bar = Gtk.Box()
-                    bar.add_css_class('event-bar')
-                    bar.set_size_request(w, 3)
-                    bar_box.append(bar)
+                    unique_colors = []
+                    for ev in cal_events:
+                        if isinstance(ev, dict):
+                            col = ev.get('cal_color')
+                            if col and col not in unique_colors:
+                                unique_colors.append(col)
+                    if unique_colors:
+                        for col in unique_colors[:4]:
+                            dot = make_color_dot(col, size=6)
+                            dot.set_valign(Gtk.Align.CENTER)
+                            bar_box.append(dot)
+                    else:
+                        bar = Gtk.Box()
+                        bar.add_css_class('event-bar')
+                        bar.set_size_request(8 if has_tasks else 18, 3)
+                        bar_box.append(bar)
+
                 overlay.add_overlay(bar_box)
 
             btn = Gtk.Button()
@@ -578,13 +742,23 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_row.set_size_request(-1, 30)
 
-        add_task_day_btn = Gtk.Button(label="+ Task for Today")
+        add_task_day_btn = Gtk.Button(label="+ Task for Day")
         add_task_day_btn.add_css_class('add-btn')
         add_task_day_btn.set_hexpand(True)
         add_task_day_btn.connect(
             "clicked",
             lambda *_: self.open_task_dialog(mode='create', default_date=self.selected_date)
         )
+
+        add_ev_day_btn = Gtk.Button(label="+ Event for Day")
+        add_ev_day_btn.add_css_class('add-btn')
+        add_ev_day_btn.set_hexpand(True)
+        def on_add_ev_day(_):
+            d = self.selected_date
+            d_str = d.strftime('%Y%m%d')
+            url = f"https://calendar.google.com/calendar/r/eventedit?dates={d_str}/{d_str}"
+            subprocess.Popen(['xdg-open', url])
+        add_ev_day_btn.connect("clicked", on_add_ev_day)
 
         open_day_cal_btn = Gtk.Button()
         cal_icon = Gtk.Label(label="\uf073")
@@ -596,6 +770,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         open_day_cal_btn.connect("clicked", self._on_open_day_cal_clicked)
 
         btn_row.append(add_task_day_btn)
+        btn_row.append(add_ev_day_btn)
         btn_row.append(open_day_cal_btn)
         self.agenda_card.append(btn_row)
 
@@ -614,9 +789,10 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                 break
             self.agenda_box.remove(child)
 
+        raw_events = [e for e in self.events.get(date.isoformat(), []) if self.is_item_visible(e)]
         day_events = sorted(
-            self.events.get(date.isoformat(), []),
-            key=lambda e: 0 if (isinstance(e, dict) and not e.get('done')) else (1 if isinstance(e, dict) else 2)
+            raw_events,
+            key=lambda e: 0 if (isinstance(e, dict) and e.get('type') == 'task' and not e.get('done')) else (2 if (isinstance(e, dict) and e.get('type') == 'task' and e.get('done')) else 1)
         )
 
         if day_events:
@@ -632,7 +808,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         row.add_css_class('agenda-row')
 
-        if isinstance(ev, dict):
+        if isinstance(ev, dict) and (ev.get('type') == 'task' or 'lid' in ev):
             done = ev.get('done', False)
             is_sub = bool(ev.get('parent'))
 
@@ -681,12 +857,67 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
             toggle.add_css_class('done-toggle-active' if done else 'done-toggle-inactive')
             toggle.connect("clicked", self._on_task_toggle, ev)
             row.append(toggle)
+
+        elif isinstance(ev, dict) and ev.get('type') == 'event':
+            cal_color = ev.get('cal_color', '#94baa6')
+            cal_name = ev.get('cal_summary', 'Event')
+            title = ev.get('title', '(no title)')
+            time_str = ev.get('time', '')
+            time_part = f"<span alpha='75%' size='small'>{html.escape(time_str)}</span>  " if time_str else ""
+
+            # Colored dot matching calendar
+            dot = make_color_dot(cal_color, size=8)
+            dot.set_valign(Gtk.Align.CENTER)
+            row.append(dot)
+
+            # Calendar badge in calendar color
+            cal_badge = Gtk.Label()
+            cal_badge.set_markup(f"<span foreground='{cal_color}' size='smaller'><b>[{html.escape(cal_name)}]</b></span>")
+            cal_badge.set_valign(Gtk.Align.CENTER)
+            row.append(cal_badge)
+
+            # Event title button
+            title_btn = Gtk.Button()
+            title_btn.add_css_class('task-title-btn')
+            title_btn.set_hexpand(True)
+
+            label = Gtk.Label()
+            label.set_halign(Gtk.Align.START)
+            label.set_ellipsize(Pango.EllipsizeMode.END)
+            label.add_css_class('event-name')
+            label.set_markup(f"{time_part}<b>{html.escape(title)}</b>")
+            title_btn.set_child(label)
+
+            target_url = ev.get('html_link') or f"https://calendar.google.com/calendar/r/day/{self.selected_date.year}/{self.selected_date.month}/{self.selected_date.day}"
+            title_btn.connect("clicked", lambda *_, url=target_url: subprocess.Popen(['xdg-open', url]))
+            row.append(title_btn)
+
+            tooltip_lines = [f"{cal_name}: {title}"]
+            if time_str:
+                tooltip_lines.append(f"Time: {time_str}")
+            if ev.get('location'):
+                tooltip_lines.append(f"Location: {ev['location']}")
+            if ev.get('description'):
+                tooltip_lines.append(f"Description:\n{ev['description']}")
+            row.set_tooltip_text("\n".join(tooltip_lines))
+
+            # External open link
+            link_btn = Gtk.Button()
+            link_icon = Gtk.Label(label="\uf08e")
+            link_icon.add_css_class('nerd')
+            link_btn.set_child(link_icon)
+            link_btn.set_size_request(20, 20)
+            link_btn.add_css_class('task-row-btn')
+            link_btn.set_tooltip_text("Open in Google Calendar")
+            link_btn.connect("clicked", lambda *_, u=target_url: subprocess.Popen(['xdg-open', u]))
+            row.append(link_btn)
+
         else:
             dot = Gtk.Label(label="•")
             dot.add_css_class('event-dot')
-            name = Gtk.Label(label=ev)
+            name = Gtk.Label(label=str(ev))
             name.set_ellipsize(Pango.EllipsizeMode.END)
-            name.set_tooltip_text(ev)
+            name.set_tooltip_text(str(ev))
             name.add_css_class('event-name')
             row.append(dot)
             row.append(name)
@@ -1622,6 +1853,196 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
 
         threading.Thread(target=do_delete, daemon=True).start()
 
+    # ── Calendars Dialog ─────────────────────────────────────────────
+    def _build_calendars_dialog(self):
+        self.cal_dialog_scrim = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.cal_dialog_scrim.set_hexpand(True)
+        self.cal_dialog_scrim.set_vexpand(True)
+        self.cal_dialog_scrim.add_css_class('dialog-scrim')
+        self.cal_dialog_scrim.set_visible(False)
+        self.root_overlay.add_overlay(self.cal_dialog_scrim)
+
+        self.cal_dialog_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.cal_dialog_card.add_css_class('desktop-card')
+        self.cal_dialog_card.add_css_class('dialog-card')
+        self.cal_dialog_card.set_size_request(440, -1)
+        self.cal_dialog_card.set_halign(Gtk.Align.CENTER)
+        self.cal_dialog_card.set_valign(Gtk.Align.CENTER)
+        self.cal_dialog_scrim.append(self.cal_dialog_card)
+
+        # Header: Title + All / None buttons + Close Button
+        hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        title_box.set_hexpand(True)
+        t_lbl = Gtk.Label()
+        t_lbl.set_markup("<b>My Calendars</b>")
+        t_lbl.set_halign(Gtk.Align.START)
+        t_lbl.add_css_class('dialog-title')
+        sub_lbl = Gtk.Label()
+        sub_lbl.set_markup("<span alpha='65%' size='smaller'>Toggle calendars to show or hide their events</span>")
+        sub_lbl.set_halign(Gtk.Align.START)
+        title_box.append(t_lbl)
+        title_box.append(sub_lbl)
+        hdr.append(title_box)
+
+        btn_all = Gtk.Button(label="All")
+        btn_all.add_css_class('pill-btn')
+        btn_all.connect("clicked", lambda *_: self._set_all_calendars_visible(True))
+        hdr.append(btn_all)
+
+        btn_none = Gtk.Button(label="None")
+        btn_none.add_css_class('pill-btn')
+        btn_none.connect("clicked", lambda *_: self._set_all_calendars_visible(False))
+        hdr.append(btn_none)
+
+        close_btn = Gtk.Button(label="✕")
+        close_btn.add_css_class('dialog-close-btn')
+        close_btn.connect("clicked", lambda *_: self.close_calendars_dialog())
+        hdr.append(close_btn)
+        self.cal_dialog_card.append(hdr)
+
+        # Scrolled content
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_max_content_height(420)
+        scroll.set_propagate_natural_height(True)
+        self.cal_dialog_card.append(scroll)
+
+        self.cal_dialog_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        scroll.set_child(self.cal_dialog_content)
+
+        # Footer
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        footer.set_margin_top(4)
+
+        gcal_settings_btn = Gtk.Button(label="↗ Google Calendar Settings")
+        gcal_settings_btn.add_css_class('pill-btn')
+        gcal_settings_btn.connect("clicked", lambda *_: subprocess.Popen(['xdg-open', 'https://calendar.google.com/calendar/r/settings']))
+        footer.append(gcal_settings_btn)
+
+        sp = Gtk.Box()
+        sp.set_hexpand(True)
+        footer.append(sp)
+
+        done_btn = Gtk.Button(label="Done")
+        done_btn.add_css_class('action-btn-primary')
+        done_btn.connect("clicked", lambda *_: self.close_calendars_dialog())
+        footer.append(done_btn)
+        self.cal_dialog_card.append(footer)
+
+    def _populate_calendars_dialog(self):
+        while True:
+            child = self.cal_dialog_content.get_first_child()
+            if child is None:
+                break
+            self.cal_dialog_content.remove(child)
+
+        # 1. My Calendars Section
+        hdr1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        hdr1.set_margin_top(4)
+        hdr1_lbl = Gtk.Label()
+        hdr1_lbl.set_markup("<b><span alpha='65%' size='small'>MY CALENDARS</span></b>")
+        hdr1_lbl.set_halign(Gtk.Align.START)
+        hdr1.append(hdr1_lbl)
+        self.cal_dialog_content.append(hdr1)
+
+        my_cals = [c for c in getattr(self, 'calendars', []) if c.get('access_role') == 'owner' or not c['id'].endswith('@import.calendar.google.com')]
+        other_cals = [c for c in getattr(self, 'calendars', []) if c not in my_cals]
+
+        for cal in my_cals:
+            self.cal_dialog_content.append(self._make_calendar_dialog_row(cal))
+
+        # 2. Other Calendars Section (if any)
+        if other_cals:
+            hdr2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            hdr2.set_margin_top(8)
+            hdr2_lbl = Gtk.Label()
+            hdr2_lbl.set_markup("<b><span alpha='65%' size='small'>OTHER CALENDARS</span></b>")
+            hdr2_lbl.set_halign(Gtk.Align.START)
+            hdr2.append(hdr2_lbl)
+            self.cal_dialog_content.append(hdr2)
+
+            for cal in other_cals:
+                self.cal_dialog_content.append(self._make_calendar_dialog_row(cal))
+
+        # 3. Tasks Integration Section
+        hdr3 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        hdr3.set_margin_top(8)
+        hdr3_lbl = Gtk.Label()
+        hdr3_lbl.set_markup("<b><span alpha='65%' size='small'>GOOGLE TASKS</span></b>")
+        hdr3_lbl.set_halign(Gtk.Align.START)
+        hdr3.append(hdr3_lbl)
+        self.cal_dialog_content.append(hdr3)
+
+        tasks_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        tasks_row.add_css_class('cal-list-row')
+
+        show_tasks = getattr(self, 'show_tasks_on_calendar', True)
+        task_chk = Gtk.Button()
+        task_chk.add_css_class('cal-checkbox')
+        task_chk.set_markup("<span foreground='#ffffff' font_weight='bold'>✓</span>" if show_tasks else " ")
+        if show_tasks:
+            task_chk.add_css_class('cal-chk-active')
+        else:
+            task_chk.add_css_class('cal-chk-inactive')
+
+        def on_toggle_tasks(*_):
+            self.show_tasks_on_calendar = not getattr(self, 'show_tasks_on_calendar', True)
+            self._save_visible_calendars()
+        task_chk.connect("clicked", on_toggle_tasks)
+        tasks_row.append(task_chk)
+
+        tasks_dot = make_color_dot('#4285f4', size=12)
+        tasks_dot.set_valign(Gtk.Align.CENTER)
+        tasks_row.append(tasks_dot)
+
+        tasks_title = Gtk.Label()
+        tasks_title.set_markup("<b>Tasks</b> <span alpha='60%' size='small'>(Show due tasks on calendar)</span>")
+        tasks_title.set_halign(Gtk.Align.START)
+        tasks_title.set_hexpand(True)
+        tasks_row.append(tasks_title)
+
+        self.cal_dialog_content.append(tasks_row)
+
+    def _make_calendar_dialog_row(self, cal):
+        cal_id = cal['id']
+        is_vis = self.is_calendar_visible(cal_id)
+        color = cal.get('color', '#94baa6')
+        name = cal.get('summary', 'Calendar')
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.add_css_class('cal-list-row')
+
+        chk = Gtk.Button()
+        chk.add_css_class('cal-checkbox')
+        chk.set_markup("<span foreground='#ffffff' font_weight='bold'>✓</span>" if is_vis else " ")
+        if is_vis:
+            chk.add_css_class('cal-chk-active')
+        else:
+            chk.add_css_class('cal-chk-inactive')
+        chk.connect("clicked", lambda *_, cid=cal_id: self.toggle_calendar(cid))
+        row.append(chk)
+
+        dot = make_color_dot(color, size=12)
+        dot.set_valign(Gtk.Align.CENTER)
+        row.append(dot)
+
+        lbl = Gtk.Label()
+        primary_badge = " <span alpha='55%' size='smaller'><b>PRIMARY</b></span>" if cal.get('primary') else ""
+        lbl.set_markup(f"<b>{html.escape(name)}</b>{primary_badge}")
+        lbl.set_halign(Gtk.Align.START)
+        lbl.set_hexpand(True)
+        row.append(lbl)
+
+        ev_count = self.get_event_count_for_calendar(cal_id)
+        count_lbl = Gtk.Label()
+        count_lbl.set_markup(f"<span alpha='50%' size='small'>{ev_count} events</span>")
+        count_lbl.set_valign(Gtk.Align.CENTER)
+        row.append(count_lbl)
+
+        return row
+
     def _draw_refresh_icon(self, da, ctx, width, height):
         r, g, b = self._refresh_fg
         if not hasattr(self, '_refresh_layout'):
@@ -1685,17 +2106,20 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self._build_grid()
 
     def reload_data(self):
-        """Reload events and task lists from disk cache and re-render."""
-        self.events, self.task_lists = load_data()
+        """Reload events, task lists, and calendars from disk cache and re-render."""
+        self.events, self.task_lists, self.calendars = load_data()
         self.current_theme = load_theme()
         self._update_clock()
         self._update_stats_pills()
         self.month_label.set_markup(
             f"<b>{datetime.date(self.year, self.month, 1).strftime('%B %Y').upper()}</b>"
         )
+        self._build_calendar_chips()
         self._build_grid()
         self._update_agenda_card(self.selected_date)
         self._populate_task_boards()
+        if hasattr(self, 'cal_dialog_scrim') and self.cal_dialog_scrim.get_visible():
+            self._populate_calendars_dialog()
 
     def reload_theme(self):
         """Reload theme settings and re-apply styling."""
@@ -1707,6 +2131,11 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         """Live update layout when config.json changes."""
         self.config = load_config()
         self.cal_width = self._calc_calendar_width()
+
+        if 'visible_calendars' in self.config:
+            self.visible_calendars = self.config.get('visible_calendars')
+        if 'show_tasks_on_calendar' in self.config:
+            self.show_tasks_on_calendar = self.config.get('show_tasks_on_calendar')
 
         self.left_col.set_size_request(self.cal_width, -1)
         self.left_col.set_hexpand(False)
@@ -1806,6 +2235,59 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
           border: 1px solid rgba(130, 164, 184, 0.35);
           background: rgba(130, 164, 184, 0.16);
           color: #82a4b8;
+      }}
+      .pill-cals {{
+          border: 1px solid rgba(148, 186, 166, 0.35);
+          background: rgba(148, 186, 166, 0.16);
+          color: #94baa6;
+      }}
+      .pill-cals:hover {{
+          background: rgba(148, 186, 166, 0.28);
+          border-color: rgba(148, 186, 166, 0.55);
+      }}
+      .cal-chip {{
+          border: 1px solid rgba(255, 255, 255, 0.10);
+          background: rgba(255, 255, 255, 0.05);
+          border-radius: 12px;
+          padding: 2px 8px;
+          font-size: 10px;
+          font-weight: 500;
+          color: {fg};
+      }}
+      .cal-chip:hover {{
+          background: rgba(255, 255, 255, 0.12);
+          border-color: rgba(255, 255, 255, 0.22);
+      }}
+      .cal-chip-inactive {{
+          opacity: 0.35;
+          background: transparent;
+          border-color: rgba(255, 255, 255, 0.05);
+      }}
+      .cal-list-row {{
+          padding: 6px 10px;
+          border-radius: 8px;
+          background: rgba(255, 255, 255, 0.035);
+          border: 1px solid rgba(255, 255, 255, 0.06);
+      }}
+      .cal-list-row:hover {{
+          background: rgba(255, 255, 255, 0.07);
+          border-color: rgba(255, 255, 255, 0.12);
+      }}
+      .cal-checkbox {{
+          min-width: 18px;
+          min-height: 18px;
+          border-radius: 5px;
+          padding: 0;
+          font-size: 11px;
+          font-weight: bold;
+      }}
+      .cal-chk-active {{
+          background-color: rgba(255, 255, 255, 0.15);
+          border: 1px solid rgba(255, 255, 255, 0.3);
+      }}
+      .cal-chk-inactive {{
+          background-color: transparent;
+          border: 1px solid rgba(255, 255, 255, 0.15);
       }}
       button {{
           background: transparent;
