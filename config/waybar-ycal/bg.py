@@ -2224,9 +2224,8 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         tasks_row.add_css_class('cal-list-row')
 
         show_tasks = getattr(self, 'show_tasks_on_calendar', True)
-        task_chk = Gtk.Button()
+        task_chk = Gtk.Button(label="✓" if show_tasks else "")
         task_chk.add_css_class('cal-checkbox')
-        task_chk.set_markup("<span foreground='#ffffff' font_weight='bold'>✓</span>" if show_tasks else " ")
         if show_tasks:
             task_chk.add_css_class('cal-chk-active')
         else:
@@ -2259,9 +2258,8 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         row.add_css_class('cal-list-row')
 
-        chk = Gtk.Button()
+        chk = Gtk.Button(label="✓" if is_vis else "")
         chk.add_css_class('cal-checkbox')
-        chk.set_markup("<span foreground='#ffffff' font_weight='bold'>✓</span>" if is_vis else " ")
         if is_vis:
             chk.add_css_class('cal-chk-active')
         else:
@@ -2552,6 +2550,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
           padding: 0;
           font-size: 11px;
           font-weight: bold;
+          color: #ffffff;
       }}
       .cal-chk-active {{
           background-color: rgba(255, 255, 255, 0.15);
