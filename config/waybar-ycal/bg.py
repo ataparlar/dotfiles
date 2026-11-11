@@ -37,6 +37,16 @@ from popup import (
     CREDENTIALS_FILE,
     TOKEN_FILE,
 )
+from accounts import (
+    load_accounts,
+    save_accounts,
+    get_account,
+    get_credentials_for_account,
+    add_account_interactive,
+    remove_account,
+    toggle_account,
+    DEFAULT_CREDENTIALS_FILE,
+)
 
 BG_PID_FILE = os.path.expanduser('~/.cache/waybar-ycal/bg.pid')
 SYNC_INTERVAL_SEC = 15 * 60  # 15 minutes
@@ -210,6 +220,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.month = self.today.month
         self.selected_date = self.today
         self.events, self.task_lists, self.calendars = load_data()
+        self.accounts = load_accounts()
         self.current_theme = load_theme()
         self.config = load_config()
         self.cal_width = self._calc_calendar_width()
@@ -502,7 +513,13 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.pending_pill.set_markup(f"<b>📋 {total_pending}</b> Pending")
         self.lists_pill.set_markup(f"<b>📁 {lists_count}</b> Lists")
         if hasattr(self, 'cals_pill_label'):
-            self.cals_pill_label.set_markup(f"<b>📅 {active_cals}/{total_cals}</b> Calendars")
+            acc_count = len(getattr(self, 'accounts', []))
+            if acc_count > 1:
+                self.cals_pill_label.set_markup(f"<b>📅 {active_cals}/{total_cals}</b> Cals <span alpha='75%' size='smaller'>({acc_count} Accounts)</span>")
+                self.cals_pill.set_tooltip_text(f"Manage Google Calendars & Accounts ({acc_count} connected)")
+            else:
+                self.cals_pill_label.set_markup(f"<b>📅 {active_cals}/{total_cals}</b> Calendars")
+                self.cals_pill.set_tooltip_text("Manage Google Calendars & Accounts")
 
     def _build_calendar_card(self):
         self.calendar_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -590,7 +607,8 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
             btn.set_child(box)
             ev_count = self.get_event_count_for_calendar(cal_id)
             status = "Visible" if is_vis else "Hidden"
-            btn.set_tooltip_text(f"{name} ({status})\n{ev_count} events • Click to toggle")
+            acc_info = f"\nAccount: {c.get('account_name')} <{c.get('account_email', '')}>" if len(getattr(self, 'accounts', [])) > 1 and c.get('account_name') else ""
+            btn.set_tooltip_text(f"{name} ({status}){acc_info}\n{ev_count} events • Click to toggle")
             btn.connect("clicked", lambda _, cid=cal_id: self.toggle_calendar(cid))
             self.cal_chips_box.append(btn)
 
@@ -998,13 +1016,19 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
             # Column Header
             hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             title_lbl = Gtk.Label()
+            acc_name = tl.get('account_name')
+            has_mult_acc = len(getattr(self, 'accounts', [])) > 1
+            acc_tag = f" <span alpha='55%' size='smaller'>({html.escape(acc_name)})</span>" if (has_mult_acc and acc_name) else ""
             title_lbl.set_markup(
-                f"<span weight='bold' foreground='{theme['color']}'>{html.escape(tl.get('title', 'Tasks'))}</span>"
+                f"<span weight='bold' foreground='{theme['color']}'>{html.escape(tl.get('title', 'Tasks'))}</span>{acc_tag}"
             )
             title_lbl.set_halign(Gtk.Align.START)
             title_lbl.set_hexpand(True)
             title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            title_lbl.set_tooltip_text(tl.get('title', 'Tasks'))
+            tooltip_txt = tl.get('title', 'Tasks')
+            if acc_name:
+                tooltip_txt += f" ({acc_name} <{tl.get('account_email', '')}>)"
+            title_lbl.set_tooltip_text(tooltip_txt)
             title_lbl.add_css_class('kanban-title')
             hdr.append(title_lbl)
 
@@ -1322,7 +1346,12 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         def do_add():
             try:
                 from googleapiclient.discovery import build
-                creds = _get_credentials()
+                acc_id = None
+                for tl in getattr(self, 'task_lists', []):
+                    if tl.get('id') == lid:
+                        acc_id = tl.get('account_id')
+                        break
+                creds = _get_credentials(acc_id)
                 if creds is None:
                     return
                 service = build('tasks', 'v1', credentials=creds)
@@ -1339,7 +1368,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         def do_toggle():
             try:
                 from googleapiclient.discovery import build
-                creds = _get_credentials()
+                creds = _get_credentials(task.get('account_id'))
                 if creds is None:
                     return
                 service = build('tasks', 'v1', credentials=creds)
@@ -1555,7 +1584,14 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.dialog_card.append(footer)
 
     def _update_dialog_lists(self, selected_lid=None):
-        titles = [tl['title'] for tl in self.task_lists]
+        has_mult_acc = len(getattr(self, 'accounts', [])) > 1
+        titles = []
+        for tl in self.task_lists:
+            acc_name = tl.get('account_name')
+            if has_mult_acc and acc_name:
+                titles.append(f"{tl['title']} ({acc_name})")
+            else:
+                titles.append(tl['title'])
         self._dialog_lists = self.task_lists
         model = Gtk.StringList.new(titles if titles else ["Default"])
         self.dialog_list_dropdown.set_model(model)
@@ -1771,7 +1807,15 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         def do_save():
             try:
                 from googleapiclient.discovery import build
-                creds = _get_credentials()
+                acc_id = None
+                if task:
+                    acc_id = task.get('account_id')
+                if not acc_id and lid:
+                    for tl in getattr(self, 'task_lists', []):
+                        if tl.get('id') == lid:
+                            acc_id = tl.get('account_id')
+                            break
+                creds = _get_credentials(acc_id)
                 if creds is None:
                     return
                 service = build('tasks', 'v1', credentials=creds)
@@ -1829,7 +1873,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         def do_delete():
             try:
                 from googleapiclient.discovery import build
-                creds = _get_credentials()
+                creds = _get_credentials(task.get('account_id'))
                 if creds is None:
                     return
                 service = build('tasks', 'v1', credentials=creds)
@@ -1865,7 +1909,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.cal_dialog_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.cal_dialog_card.add_css_class('desktop-card')
         self.cal_dialog_card.add_css_class('dialog-card')
-        self.cal_dialog_card.set_size_request(440, -1)
+        self.cal_dialog_card.set_size_request(480, -1)
         self.cal_dialog_card.set_halign(Gtk.Align.CENTER)
         self.cal_dialog_card.set_valign(Gtk.Align.CENTER)
         self.cal_dialog_scrim.append(self.cal_dialog_card)
@@ -1876,11 +1920,11 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         title_box.set_hexpand(True)
         t_lbl = Gtk.Label()
-        t_lbl.set_markup("<b>My Calendars</b>")
+        t_lbl.set_markup("<b>Calendars &amp; Accounts</b>")
         t_lbl.set_halign(Gtk.Align.START)
         t_lbl.add_css_class('dialog-title')
         sub_lbl = Gtk.Label()
-        sub_lbl.set_markup("<span alpha='65%' size='smaller'>Toggle calendars to show or hide their events</span>")
+        sub_lbl.set_markup("<span alpha='65%' size='smaller'>Manage Google accounts and visible calendars</span>")
         sub_lbl.set_halign(Gtk.Align.START)
         title_box.append(t_lbl)
         title_box.append(sub_lbl)
@@ -1905,7 +1949,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         # Scrolled content
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_max_content_height(420)
+        scroll.set_max_content_height(460)
         scroll.set_propagate_natural_height(True)
         self.cal_dialog_card.append(scroll)
 
@@ -1931,6 +1975,129 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         footer.append(done_btn)
         self.cal_dialog_card.append(footer)
 
+    def _build_add_account_section(self):
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        container.add_css_class('add-account-container')
+
+        # Toggle button to open inline add-account form
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        add_btn = Gtk.Button(label="+ Add Google Account (Personal / Company)")
+        add_btn.add_css_class('action-btn-primary')
+        add_btn.set_hexpand(True)
+        btn_row.append(add_btn)
+        container.append(btn_row)
+
+        form_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        form_box.add_css_class('add-account-form')
+        form_box.set_visible(False)
+        container.append(form_box)
+
+        # Form fields
+        lbl_info = Gtk.Label()
+        lbl_info.set_markup(
+            "<span alpha='75%' size='smaller'>"
+            "Sign in with your company or personal Google account.<br/>"
+            "Google will open in your browser to authorize Calendar &amp; Tasks."
+            "</span>"
+        )
+        lbl_info.set_halign(Gtk.Align.START)
+        lbl_info.set_wrap(True)
+        form_box.append(lbl_info)
+
+        # Account Name entry
+        name_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        name_lbl = Gtk.Label(label="Label:")
+        name_lbl.set_size_request(60, -1)
+        name_lbl.set_halign(Gtk.Align.START)
+        name_entry = Gtk.Entry()
+        name_entry.set_placeholder_text("e.g. Company, Work, School")
+        name_entry.set_text("Company")
+        name_entry.set_hexpand(True)
+        name_row.append(name_lbl)
+        name_row.append(name_entry)
+        form_box.append(name_row)
+
+        # Credentials entry (optional custom file for company OAuth client)
+        cred_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        cred_lbl = Gtk.Label(label="Secrets:")
+        cred_lbl.set_size_request(60, -1)
+        cred_lbl.set_halign(Gtk.Align.START)
+        cred_entry = Gtk.Entry()
+        cred_entry.set_placeholder_text(DEFAULT_CREDENTIALS_FILE)
+        cred_entry.set_hexpand(True)
+        cred_row.append(cred_lbl)
+        cred_row.append(cred_entry)
+        form_box.append(cred_row)
+
+        # Action buttons + status label
+        act_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        auth_btn = Gtk.Button(label="🌐 Sign In in Browser")
+        auth_btn.add_css_class('action-btn-primary')
+        act_row.append(auth_btn)
+
+        cancel_btn = Gtk.Button(label="Cancel")
+        cancel_btn.add_css_class('pill-btn')
+        act_row.append(cancel_btn)
+
+        cli_hint = Gtk.Label()
+        cli_hint.set_markup("<span alpha='50%' size='smaller'>(or run <i>./add-account.sh</i>)</span>")
+        cli_hint.set_halign(Gtk.Align.END)
+        cli_hint.set_hexpand(True)
+        act_row.append(cli_hint)
+        form_box.append(act_row)
+
+        status_lbl = Gtk.Label()
+        status_lbl.set_halign(Gtk.Align.START)
+        status_lbl.set_visible(False)
+        form_box.append(status_lbl)
+
+        def toggle_form(*_):
+            form_box.set_visible(not form_box.get_visible())
+
+        add_btn.connect("clicked", toggle_form)
+        cancel_btn.connect("clicked", lambda *_: form_box.set_visible(False))
+
+        def run_auth_flow(*_):
+            auth_btn.set_sensitive(False)
+            auth_btn.add_css_class('pulsing')
+            status_lbl.set_visible(True)
+            status_lbl.set_markup("<span foreground='#3584e4'>Opening browser... Sign in and grant access.</span>")
+
+            acc_name = name_entry.get_text().strip() or "Company"
+            custom_cred = cred_entry.get_text().strip() or None
+
+            def do_in_thread():
+                try:
+                    new_acc = add_account_interactive(
+                        name=acc_name,
+                        credentials_file=custom_cred,
+                        prompt='select_account',
+                    )
+                    _run_sync()
+
+                    def on_success():
+                        auth_btn.remove_css_class('pulsing')
+                        auth_btn.set_sensitive(True)
+                        status_lbl.set_markup(f"<span foreground='#2ec27e'>✓ Added {html.escape(new_acc.get('name', 'Account'))} &lt;{html.escape(new_acc.get('email', ''))}&gt;!</span>")
+                        self.accounts = load_accounts()
+                        self.reload_data()
+                        GLib.timeout_add(1500, lambda: self._populate_calendars_dialog())
+                        return False
+                    GLib.idle_add(on_success)
+                except Exception as ex:
+                    def on_err():
+                        auth_btn.remove_css_class('pulsing')
+                        auth_btn.set_sensitive(True)
+                        status_lbl.set_markup(f"<span foreground='#e01b24'>✕ Error: {html.escape(str(ex))}</span>")
+                        return False
+                    GLib.idle_add(on_err)
+
+            threading.Thread(target=do_in_thread, daemon=True).start()
+
+        auth_btn.connect("clicked", run_auth_flow)
+
+        return container
+
     def _populate_calendars_dialog(self):
         while True:
             child = self.cal_dialog_content.get_first_child()
@@ -1938,42 +2105,120 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                 break
             self.cal_dialog_content.remove(child)
 
-        # 1. My Calendars Section
-        hdr1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        hdr1.set_margin_top(4)
-        hdr1_lbl = Gtk.Label()
-        hdr1_lbl.set_markup("<b><span alpha='65%' size='small'>MY CALENDARS</span></b>")
-        hdr1_lbl.set_halign(Gtk.Align.START)
-        hdr1.append(hdr1_lbl)
-        self.cal_dialog_content.append(hdr1)
+        accounts = load_accounts()
+        all_cals = getattr(self, 'calendars', [])
 
-        my_cals = [c for c in getattr(self, 'calendars', []) if c.get('access_role') == 'owner' or not c['id'].endswith('@import.calendar.google.com')]
-        other_cals = [c for c in getattr(self, 'calendars', []) if c not in my_cals]
+        # Add Account Section at top
+        add_account_box = self._build_add_account_section()
+        self.cal_dialog_content.append(add_account_box)
 
-        for cal in my_cals:
-            self.cal_dialog_content.append(self._make_calendar_dialog_row(cal))
+        # If accounts are defined, group calendars by account
+        if accounts:
+            for acc in accounts:
+                acc_id = acc.get('id')
+                acc_name = acc.get('name', 'Google Account')
+                acc_email = acc.get('email', '')
+                acc_color = acc.get('color', '#4285f4')
+                is_enabled = acc.get('enabled', True)
 
-        # 2. Other Calendars Section (if any)
-        if other_cals:
-            hdr2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            hdr2.set_margin_top(8)
-            hdr2_lbl = Gtk.Label()
-            hdr2_lbl.set_markup("<b><span alpha='65%' size='small'>OTHER CALENDARS</span></b>")
-            hdr2_lbl.set_halign(Gtk.Align.START)
-            hdr2.append(hdr2_lbl)
-            self.cal_dialog_content.append(hdr2)
+                # Account Header Banner
+                acc_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                acc_hdr.set_margin_top(10)
+                acc_hdr.add_css_class('account-banner')
 
-            for cal in other_cals:
+                avatar = Gtk.Label()
+                icon_str = "🏢" if any(w in acc_name.lower() or w in acc_email.lower() for w in ['company', 'work', 'corp', 'office']) else "👤"
+                avatar.set_markup(f"<span size='large'>{icon_str}</span>")
+                avatar.set_valign(Gtk.Align.CENTER)
+                acc_hdr.append(avatar)
+
+                title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+                title_box.set_hexpand(True)
+                acc_title_lbl = Gtk.Label()
+                acc_title_lbl.set_markup(f"<b><span foreground='{acc_color}'>{html.escape(acc_name)}</span></b>")
+                acc_title_lbl.set_halign(Gtk.Align.START)
+
+                acc_email_lbl = Gtk.Label()
+                acc_email_lbl.set_markup(f"<span alpha='65%' size='smaller'>{html.escape(acc_email)}</span>")
+                acc_email_lbl.set_halign(Gtk.Align.START)
+
+                title_box.append(acc_title_lbl)
+                title_box.append(acc_email_lbl)
+                acc_hdr.append(title_box)
+
+                # Account toggle button
+                toggle_btn = Gtk.Button(label="Enabled" if is_enabled else "Paused")
+                toggle_btn.add_css_class('pill-btn')
+                if not is_enabled:
+                    toggle_btn.add_css_class('account-paused-btn')
+                def on_toggle_acc(*_, aid=acc_id):
+                    toggle_account(aid)
+                    self.accounts = load_accounts()
+                    _run_sync()
+                    self.reload_data()
+                    self._populate_calendars_dialog()
+                toggle_btn.connect("clicked", on_toggle_acc)
+                acc_hdr.append(toggle_btn)
+
+                # If multiple accounts, offer Remove button
+                if len(accounts) > 1:
+                    remove_btn = Gtk.Button(label="Remove")
+                    remove_btn.add_css_class('pill-btn')
+                    remove_btn.add_css_class('remove-btn')
+                    def on_remove_acc(*_, aid=acc_id):
+                        if remove_account(aid):
+                            self.accounts = load_accounts()
+                            _run_sync()
+                            self.reload_data()
+                            self._populate_calendars_dialog()
+                    remove_btn.connect("clicked", on_remove_acc)
+                    acc_hdr.append(remove_btn)
+
+                self.cal_dialog_content.append(acc_hdr)
+
+                # List calendars belonging to this account
+                acc_cals = [c for c in all_cals if c.get('account_id') == acc_id or c.get('account_email') == acc_email]
+                if acc_cals:
+                    for cal in acc_cals:
+                        self.cal_dialog_content.append(self._make_calendar_dialog_row(cal))
+                else:
+                    empty_acc = Gtk.Label(label="No calendars found in this account")
+                    empty_acc.add_css_class('no-events')
+                    empty_acc.set_halign(Gtk.Align.START)
+                    empty_acc.set_margin_start(16)
+                    self.cal_dialog_content.append(empty_acc)
+
+            # Check if there are other / unassociated calendars
+            other_cals = [c for c in all_cals if not c.get('account_id') and not any(c.get('account_email') == a.get('email') for a in accounts)]
+            if other_cals:
+                hdr_other = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                hdr_other.set_margin_top(10)
+                lbl_other = Gtk.Label()
+                lbl_other.set_markup("<b><span alpha='65%' size='small'>OTHER / SUBSCRIBED CALENDARS</span></b>")
+                lbl_other.set_halign(Gtk.Align.START)
+                hdr_other.append(lbl_other)
+                self.cal_dialog_content.append(hdr_other)
+                for cal in other_cals:
+                    self.cal_dialog_content.append(self._make_calendar_dialog_row(cal))
+
+        else:
+            # Fallback for unconfigured
+            my_cals = [c for c in all_cals if c.get('access_role') == 'owner' or not c['id'].endswith('@import.calendar.google.com')]
+            other_cals = [c for c in all_cals if c not in my_cals]
+            for cal in my_cals:
                 self.cal_dialog_content.append(self._make_calendar_dialog_row(cal))
+            if other_cals:
+                for cal in other_cals:
+                    self.cal_dialog_content.append(self._make_calendar_dialog_row(cal))
 
-        # 3. Tasks Integration Section
-        hdr3 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        hdr3.set_margin_top(8)
-        hdr3_lbl = Gtk.Label()
-        hdr3_lbl.set_markup("<b><span alpha='65%' size='small'>GOOGLE TASKS</span></b>")
-        hdr3_lbl.set_halign(Gtk.Align.START)
-        hdr3.append(hdr3_lbl)
-        self.cal_dialog_content.append(hdr3)
+        # Tasks Section
+        hdr_t = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        hdr_t.set_margin_top(10)
+        lbl_t = Gtk.Label()
+        lbl_t.set_markup("<b><span alpha='65%' size='small'>GOOGLE TASKS</span></b>")
+        lbl_t.set_halign(Gtk.Align.START)
+        hdr_t.append(lbl_t)
+        self.cal_dialog_content.append(hdr_t)
 
         tasks_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         tasks_row.add_css_class('cal-list-row')
@@ -2108,6 +2353,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
     def reload_data(self):
         """Reload events, task lists, and calendars from disk cache and re-render."""
         self.events, self.task_lists, self.calendars = load_data()
+        self.accounts = load_accounts()
         self.current_theme = load_theme()
         self._update_clock()
         self._update_stats_pills()
@@ -2272,6 +2518,32 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
       .cal-list-row:hover {{
           background: rgba(255, 255, 255, 0.07);
           border-color: rgba(255, 255, 255, 0.12);
+      }}
+      .account-banner {{
+          background: rgba(255, 255, 255, 0.05);
+          border-radius: 8px;
+          padding: 6px 10px;
+          border-left: 3px solid {th.get('accent', '#94baa6')};
+          margin-top: 10px;
+          margin-bottom: 2px;
+      }}
+      .account-paused-btn {{
+          opacity: 0.5;
+      }}
+      .remove-btn:hover {{
+          color: #e01b24 !important;
+          border-color: rgba(224, 27, 36, 0.4) !important;
+      }}
+      .add-account-container {{
+          padding: 2px 0 8px 0;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+          margin-bottom: 4px;
+      }}
+      .add-account-form {{
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 8px;
+          padding: 10px 12px;
       }}
       .cal-checkbox {{
           min-width: 18px;

@@ -1,4 +1,8 @@
-credentials.json
+credentials*.json
 client_secret*.json
+accounts.json
+tokens/
+token*.json
 *.pid
 __pycache__/
+

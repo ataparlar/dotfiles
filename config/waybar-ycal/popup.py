@@ -29,224 +29,295 @@ SYNC_INTERVAL_SEC = 15 * 60  # 15 minutes
 
 # Nerd Font family used for icon buttons (refresh + edit).
 NERD_FONT = "JetBrainsMonoNL Nerd Font, JetBrainsMono Nerd Font, Symbols Nerd Font"
-SCOPES = [
-    'https://www.googleapis.com/auth/calendar.readonly',
-    'https://www.googleapis.com/auth/tasks',
-]
+
+# Multi-account support
+from accounts import (
+    load_accounts,
+    get_account,
+    get_credentials_for_account,
+    get_all_active_credentials,
+    DEFAULT_CREDENTIALS_FILE,
+    LEGACY_TOKEN_FILE,
+    SCOPES,
+)
 
 
-def _get_credentials():
-    from google.auth.transport.requests import Request
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
+def _get_credentials(account_id=None):
+    """Get valid credentials for account_id or the default active account."""
+    if account_id:
+        creds = get_credentials_for_account(account_id)
+        if creds:
+            return creds
 
-    creds = None
+    accounts = load_accounts()
+    for acc in accounts:
+        if acc.get('enabled', True):
+            creds = get_credentials_for_account(acc)
+            if creds:
+                return creds
+
     if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not os.path.exists(CREDENTIALS_FILE):
-                return None
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-        os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
-        with open(TOKEN_FILE, 'w') as f:
-            f.write(creds.to_json())
-    return creds
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+            if not creds.valid:
+                if creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                    with open(TOKEN_FILE, 'w', encoding='utf-8') as f:
+                        f.write(creds.to_json())
+            return creds
+        except Exception:
+            pass
+    return None
 
 
 def _run_sync():
-    """Fetch events from Google Calendar and Google Tasks, write to cache. Runs in a thread."""
+    """Fetch events from Google Calendar and Google Tasks across all enabled accounts, write to cache. Runs in a thread."""
     try:
         from googleapiclient.discovery import build
+        from accounts import load_accounts, get_credentials_for_account, ensure_dirs
 
-        if not os.path.exists(TOKEN_FILE):
-            return
+        ensure_dirs()
+        accounts = load_accounts()
+        if not accounts:
+            creds = _get_credentials()
+            if creds is None:
+                return
+            accounts = load_accounts()
+            if not accounts:
+                return
 
-        creds = _get_credentials()
-        if creds is None:
-            return
-
-        service = build('calendar', 'v3', credentials=creds)
         today = datetime.date.today()
         # Fetch from 1 year past to 2 years future to cover academic calendars, deadlines, and events
         time_min = (today - datetime.timedelta(days=365)).isoformat() + 'T00:00:00Z'
         time_max = (today + datetime.timedelta(days=730)).isoformat() + 'T23:59:59Z'
 
-        # Fetch all calendars from Google Calendar
-        cal_list = service.calendarList().list().execute()
-        raw_cals = cal_list.get('items', [])
-        calendars_data = []
-        for c in raw_cals:
-            calendars_data.append({
-                'id': c['id'],
-                'summary': c.get('summary', '(Untitled Calendar)'),
-                'description': c.get('description', ''),
-                'color': c.get('backgroundColor', '#94baa6'),
-                'fg_color': c.get('foregroundColor', '#000000'),
-                'selected': bool(c.get('selected', False)),
-                'primary': bool(c.get('primary', False)),
-                'access_role': c.get('accessRole', 'reader'),
+        unified_events_by_date = {}
+        unified_task_lists = []
+        unified_calendars = []
+        accounts_data = []
+
+        for acc in accounts:
+            if not acc.get('enabled', True):
+                continue
+
+            acc_id = acc.get('id')
+            acc_name = acc.get('name', 'Google Account')
+            acc_email = acc.get('email', '')
+            acc_color = acc.get('color', '#4285f4')
+            accounts_data.append({
+                'id': acc_id,
+                'name': acc_name,
+                'email': acc_email,
+                'color': acc_color,
+                'enabled': True,
             })
 
-        events_by_date = {}
-        for cal in calendars_data:
-            cal_id = cal['id']
-            cal_summary = cal['summary']
-            cal_color = cal['color']
             try:
-                result = service.events().list(
-                    calendarId=cal_id,
-                    timeMin=time_min,
-                    timeMax=time_max,
-                    singleEvents=True,
-                    orderBy='startTime',
-                    maxResults=2500,
-                ).execute()
+                creds = get_credentials_for_account(acc)
             except Exception as e:
-                print(f"[gcal sync calendar error: {cal_summary}] {e}", file=sys.stderr)
+                print(f"[gcal sync] Error loading credentials for {acc_email}: {e}", file=sys.stderr)
                 continue
 
-            for item in result.get('items', []):
-                start = item.get('start', {})
-                end = item.get('end', {})
-                title = item.get('summary', '(no title)')
-                location = item.get('location', '')
-                description = item.get('description', '')
-                html_link = item.get('htmlLink', '')
+            if not creds:
+                continue
 
-                if 'dateTime' in start:
-                    dt = datetime.datetime.fromisoformat(start['dateTime'])
-                    dt_end = datetime.datetime.fromisoformat(end.get('dateTime', start['dateTime']))
-                    time_str = f"{dt.strftime('%H:%M')}-{dt_end.strftime('%H:%M')}"
-                    ev_item = {
-                        'type': 'event',
-                        'id': item.get('id', ''),
-                        'cal_id': cal_id,
-                        'cal_summary': cal_summary,
-                        'cal_color': cal_color,
-                        'title': title,
-                        'time': time_str,
-                        'start': start['dateTime'],
-                        'end': end.get('dateTime', ''),
-                        'location': location,
-                        'description': description,
-                        'html_link': html_link,
-                    }
-                    events_by_date.setdefault(dt.date().isoformat(), []).append(ev_item)
-                elif 'date' in start:
-                    d = datetime.date.fromisoformat(start['date'])
-                    d_end = datetime.date.fromisoformat(end.get('date', start['date']))
-                    ev_item = {
-                        'type': 'event',
-                        'id': item.get('id', ''),
-                        'cal_id': cal_id,
-                        'cal_summary': cal_summary,
-                        'cal_color': cal_color,
-                        'title': title,
-                        'time': 'All day',
-                        'start': start['date'],
-                        'end': end.get('date', ''),
-                        'location': location,
-                        'description': description,
-                        'html_link': html_link,
-                    }
-                    if d == d_end:
-                        events_by_date.setdefault(d.isoformat(), []).append(ev_item)
-                    else:
-                        cur = d
-                        while cur < d_end:
-                            events_by_date.setdefault(cur.isoformat(), []).append(ev_item)
-                            cur += datetime.timedelta(days=1)
-
-        # Fetch Google Tasks with subtask hierarchy, due dates, times, and notes
-        tasks_service = build('tasks', 'v1', credentials=creds)
-        task_lists = tasks_service.tasklists().list().execute()
-        task_lists_data = []
-
-        for tl in task_lists.get('items', []):
-            tl_id = tl['id']
-            tl_title = tl.get('title', 'Tasks')
+            # Fetch Calendars
             try:
-                tasks_res = tasks_service.tasks().list(
-                    tasklist=tl_id,
-                    showCompleted=True,
-                    showHidden=True,
-                    maxResults=100,
-                ).execute()
-            except Exception:
-                continue
+                service = build('calendar', 'v3', credentials=creds)
+                cal_list = service.calendarList().list().execute()
+                raw_cals = cal_list.get('items', [])
+                for c in raw_cals:
+                    cal_info = {
+                        'id': c['id'],
+                        'summary': c.get('summary', '(Untitled Calendar)'),
+                        'description': c.get('description', ''),
+                        'color': c.get('backgroundColor', '#94baa6'),
+                        'fg_color': c.get('foregroundColor', '#000000'),
+                        'selected': bool(c.get('selected', False)),
+                        'primary': bool(c.get('primary', False)),
+                        'access_role': c.get('accessRole', 'reader'),
+                        'account_id': acc_id,
+                        'account_name': acc_name,
+                        'account_email': acc_email,
+                        'account_color': acc_color,
+                    }
+                    unified_calendars.append(cal_info)
 
-            raw_tasks = tasks_res.get('items', [])
-            task_map = {}
-            top_level_tasks = []
-            subs_by_parent = {}
+                    # Fetch Events for this calendar
+                    try:
+                        result = service.events().list(
+                            calendarId=c['id'],
+                            timeMin=time_min,
+                            timeMax=time_max,
+                            singleEvents=True,
+                            orderBy='startTime',
+                            maxResults=2500,
+                        ).execute()
+                    except Exception as e:
+                        print(f"[gcal sync calendar error: {c.get('summary')}] {e}", file=sys.stderr)
+                        continue
 
-            for task in raw_tasks:
-                t_id = task['id']
-                due = task.get('due')  # RFC 3339 timestamp
-                title = task.get('title', '(no title)')
-                notes = task.get('notes') or ''
-                completed = task.get('status') == 'completed'
-                parent = task.get('parent')
+                    for item in result.get('items', []):
+                        start = item.get('start', {})
+                        end = item.get('end', {})
+                        title = item.get('summary', '(no title)')
+                        location = item.get('location', '')
+                        description = item.get('description', '')
+                        html_link = item.get('htmlLink', '')
 
-                # Extract time from notes (e.g. ⏰ 14:30 or [14:30]) or due timestamp
-                time_str = None
-                clean_notes = notes
-                time_m = re.search(r'^(?:⏰\s*|\[)(\d{1,2}:\d{2})(?:\]|\n|\s*)', notes)
-                if time_m:
-                    time_str = time_m.group(1)
-                    clean_notes = notes[time_m.end():].lstrip()
-                elif due and len(due) > 16 and due[11:16] != '00:00':
-                    time_str = due[11:16]
+                        if 'dateTime' in start:
+                            dt = datetime.datetime.fromisoformat(start['dateTime'])
+                            dt_end = datetime.datetime.fromisoformat(end.get('dateTime', start['dateTime']))
+                            time_str = f"{dt.strftime('%H:%M')}-{dt_end.strftime('%H:%M')}"
+                            ev_item = {
+                                'type': 'event',
+                                'id': item.get('id', ''),
+                                'cal_id': c['id'],
+                                'cal_summary': c.get('summary', '(Untitled Calendar)'),
+                                'cal_color': c.get('backgroundColor', '#94baa6'),
+                                'title': title,
+                                'time': time_str,
+                                'start': start['dateTime'],
+                                'end': end.get('dateTime', ''),
+                                'location': location,
+                                'description': description,
+                                'html_link': html_link,
+                                'account_id': acc_id,
+                                'account_name': acc_name,
+                                'account_email': acc_email,
+                                'account_color': acc_color,
+                            }
+                            unified_events_by_date.setdefault(dt.date().isoformat(), []).append(ev_item)
+                        elif 'date' in start:
+                            d = datetime.date.fromisoformat(start['date'])
+                            d_end = datetime.date.fromisoformat(end.get('date', start['date']))
+                            ev_item = {
+                                'type': 'event',
+                                'id': item.get('id', ''),
+                                'cal_id': c['id'],
+                                'cal_summary': c.get('summary', '(Untitled Calendar)'),
+                                'cal_color': c.get('backgroundColor', '#94baa6'),
+                                'title': title,
+                                'time': 'All day',
+                                'start': start['date'],
+                                'end': end.get('date', ''),
+                                'location': location,
+                                'description': description,
+                                'html_link': html_link,
+                                'account_id': acc_id,
+                                'account_name': acc_name,
+                                'account_email': acc_email,
+                                'account_color': acc_color,
+                            }
+                            if d == d_end:
+                                unified_events_by_date.setdefault(d.isoformat(), []).append(ev_item)
+                            else:
+                                cur = d
+                                while cur < d_end:
+                                    unified_events_by_date.setdefault(cur.isoformat(), []).append(ev_item)
+                                    cur += datetime.timedelta(days=1)
+            except Exception as e:
+                print(f"[gcal sync calendar error for account {acc_email}]: {e}", file=sys.stderr)
 
-                task_item = {
-                    'type': 'task',
-                    'id': t_id,
-                    'lid': tl_id,
-                    'title': title,
-                    'notes': clean_notes,
-                    'raw_notes': notes,
-                    'done': completed,
-                    'due': due[:10] if due else None,
-                    'time': time_str,
-                    'parent': parent,
-                    'position': task.get('position', ''),
-                    'subtasks': [],
-                }
-                task_map[t_id] = task_item
-                if parent:
-                    subs_by_parent.setdefault(parent, []).append(task_item)
-                else:
-                    top_level_tasks.append(task_item)
+            # Fetch Google Tasks with subtask hierarchy, due dates, times, and notes
+            try:
+                tasks_service = build('tasks', 'v1', credentials=creds)
+                task_lists = tasks_service.tasklists().list().execute()
 
-            # Link subtasks to their parent task
-            for pid, subs in subs_by_parent.items():
-                if pid in task_map:
-                    parent_task = task_map[pid]
-                    for s in subs:
-                        s['parent_title'] = parent_task['title']
-                    parent_task['subtasks'] = subs
-                else:
-                    top_level_tasks.extend(subs)
+                for tl in task_lists.get('items', []):
+                    tl_id = tl['id']
+                    tl_title = tl.get('title', 'Tasks')
+                    try:
+                        tasks_res = tasks_service.tasks().list(
+                            tasklist=tl_id,
+                            showCompleted=True,
+                            showHidden=True,
+                            maxResults=100,
+                        ).execute()
+                    except Exception:
+                        continue
 
-            # Add tasks and subtasks with due dates to events_by_date
-            for t_item in task_map.values():
-                if t_item.get('due'):
-                    events_by_date.setdefault(t_item['due'], []).append(t_item)
+                    raw_tasks = tasks_res.get('items', [])
+                    task_map = {}
+                    top_level_tasks = []
+                    subs_by_parent = {}
 
-            task_lists_data.append({
-                'id': tl_id,
-                'title': tl_title,
-                'tasks': top_level_tasks,
-            })
+                    for task in raw_tasks:
+                        t_id = task['id']
+                        due = task.get('due')  # RFC 3339 timestamp
+                        title = task.get('title', '(no title)')
+                        notes = task.get('notes') or ''
+                        completed = task.get('status') == 'completed'
+                        parent = task.get('parent')
+
+                        # Extract time from notes (e.g. ⏰ 14:30 or [14:30]) or due timestamp
+                        time_str = None
+                        clean_notes = notes
+                        time_m = re.search(r'^(?:⏰\s*|\[)(\d{1,2}:\d{2})(?:\]|\n|\s*)', notes)
+                        if time_m:
+                            time_str = time_m.group(1)
+                            clean_notes = notes[time_m.end():].lstrip()
+                        elif due and len(due) > 16 and due[11:16] != '00:00':
+                            time_str = due[11:16]
+
+                        task_item = {
+                            'type': 'task',
+                            'id': t_id,
+                            'lid': tl_id,
+                            'title': title,
+                            'notes': clean_notes,
+                            'raw_notes': notes,
+                            'done': completed,
+                            'due': due[:10] if due else None,
+                            'time': time_str,
+                            'parent': parent,
+                            'position': task.get('position', ''),
+                            'account_id': acc_id,
+                            'account_name': acc_name,
+                            'account_email': acc_email,
+                            'account_color': acc_color,
+                            'subtasks': [],
+                        }
+                        task_map[t_id] = task_item
+                        if parent:
+                            subs_by_parent.setdefault(parent, []).append(task_item)
+                        else:
+                            top_level_tasks.append(task_item)
+
+                    # Link subtasks to their parent task
+                    for pid, subs in subs_by_parent.items():
+                        if pid in task_map:
+                            parent_task = task_map[pid]
+                            for s in subs:
+                                s['parent_title'] = parent_task['title']
+                            parent_task['subtasks'] = subs
+                        else:
+                            top_level_tasks.extend(subs)
+
+                    # Add tasks and subtasks with due dates to events_by_date
+                    for t_item in task_map.values():
+                        if t_item.get('due'):
+                            unified_events_by_date.setdefault(t_item['due'], []).append(t_item)
+
+                    unified_task_lists.append({
+                        'id': tl_id,
+                        'title': tl_title,
+                        'account_id': acc_id,
+                        'account_name': acc_name,
+                        'account_email': acc_email,
+                        'account_color': acc_color,
+                        'tasks': top_level_tasks,
+                    })
+            except Exception as e:
+                print(f"[tasks sync error for account {acc_email}]: {e}", file=sys.stderr)
 
         cache_data = {
-            'events': events_by_date,
-            'task_lists': task_lists_data,
-            'calendars': calendars_data,
+            'events': unified_events_by_date,
+            'task_lists': unified_task_lists,
+            'calendars': unified_calendars,
+            'accounts': accounts_data,
         }
 
         os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
@@ -927,7 +998,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
         def do_toggle():
             try:
                 from googleapiclient.discovery import build
-                creds = _get_credentials()
+                creds = _get_credentials(task.get('account_id'))
                 if creds is None:
                     return
                 service = build('tasks', 'v1', credentials=creds)
@@ -1302,7 +1373,12 @@ class CalendarPopup(Gtk.ApplicationWindow):
         def do_add():
             try:
                 from googleapiclient.discovery import build
-                creds = _get_credentials()
+                acc_id = None
+                for tl in getattr(self, 'task_lists', []):
+                    if tl.get('id') == lid:
+                        acc_id = tl.get('account_id')
+                        break
+                creds = _get_credentials(acc_id)
                 if creds is None:
                     return
                 service = build('tasks', 'v1', credentials=creds)
@@ -1731,7 +1807,15 @@ class CalendarPopup(Gtk.ApplicationWindow):
         def do_save():
             try:
                 from googleapiclient.discovery import build
-                creds = _get_credentials()
+                acc_id = None
+                if task:
+                    acc_id = task.get('account_id')
+                if not acc_id and lid:
+                    for tl in getattr(self, 'task_lists', []):
+                        if tl.get('id') == lid:
+                            acc_id = tl.get('account_id')
+                            break
+                creds = _get_credentials(acc_id)
                 if creds is None:
                     return
                 service = build('tasks', 'v1', credentials=creds)
@@ -1792,7 +1876,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
         def do_delete():
             try:
                 from googleapiclient.discovery import build
-                creds = _get_credentials()
+                creds = _get_credentials(task.get('account_id'))
                 if creds is None:
                     return
                 service = build('tasks', 'v1', credentials=creds)

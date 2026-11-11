@@ -1,99 +1,148 @@
-# hypr-ycal (Waybar Ycal + Hyprland Background Task Manager)
+# hypr-ycal
 
-An interactive desktop productivity suite for Wayland / Hyprland and Waybar, combining:
-1. **Desktop Background Dashboard (`bg.py`)**: An always-on, interactive Google Calendar & Google Tasks dashboard running on Hyprland's background layer (`gtk4-layer-shell`).
-2. **Waybar Popup Daemon (`popup.py`)**: Fast on-demand calendar & task popup invoked from the Waybar bar module.
-3. **Dynamic Theme Engine (`switch-theme.sh`)**: Hot-reloading matte themes (Dark Pastel Grey-Green, Neutral Grey, Catppuccin Mocha) synchronized across both Waybar and the desktop background.
+An interactive desktop productivity suite for **Wayland / Hyprland** and **Waybar**, combining a persistent desktop background dashboard with a fast top-layer Waybar popup.
+
+- **Desktop Background Dashboard (`bg.py`)**: An always-on, interactive Google Calendar & Google Tasks dashboard running on Hyprland's bottom layer (`gtk4-layer-shell`). View your month calendar, today's schedule, and categorized task lists side by side. Add tasks, toggle completion, and view rich task details directly on your desktop.
+- **Multiple Google Accounts**: Control and display multiple Google accounts simultaneously (e.g. Personal + Company/Work). Calendars, events, and task boards across all active accounts sync seamlessly into a unified view.
+- **Multi-Calendar Support**: Syncs all your Google Calendars (e.g., classes, work, personal, family, subscribed webcal) simultaneously. Color-codes events and grid dates with each calendar's native Google colors, features a dedicated "My Calendars" modal manager, and provides quick 1-click filter chips above the month grid.
+- **Waybar Popup Daemon (`popup.py`)**: A lightweight popup widget triggered on click from your Waybar bar module with multi-calendar event details.
+- **Waybar Bar Module (`bar.py`)**: Lightweight status script displaying current date, events count, and rich tooltip summaries.
+- **Dynamic Theme Engine (`switch-theme.sh`)**: Matte, eye-friendly color palettes (`dark-pastel-grey-green`, `neutral-grey`, `catppuccin-mocha`) synchronized across both Waybar and the desktop background.
 
 ---
 
-## Google Cloud OAuth Setup
+## Screenshots
+![hypr-ycal-1](screenshots/screenshot-20261110-172919.png)
 
-To access your Google Calendar and Google Tasks, you need personal OAuth2 credentials from Google Cloud. This is a free, one-time setup:
+![hypr-ycal-2](screenshots/screenshot-20261110-173344.png)
 
-1. Open the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (e.g. `waybar-ycal` or `my-desktop-calendar`).
-3. **Enable APIs**: Navigate to **APIs & Services → Library**, search for and enable:
+![hypr-ycal-3](screenshots/screenshot-20261110-173500.png)
+
+---
+
+## Google Cloud Setup
+
+To connect to your Google Calendar and Google Tasks, you need OAuth2 credentials from Google Cloud. This is a one-time personal setup:
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a new project (e.g. `waybar-ycal`).
+3. **Enable APIs** — search and enable both:
    - **Google Calendar API**
    - **Google Tasks API**
-4. **Configure OAuth Consent Screen**:
-   - Go to **APIs & Services → OAuth consent screen**.
-   - Choose **External** user type and fill in required app info (app name, your email).
-   - In **Publishing status**, set it to **In production** (or add your personal Google account under test users). Personal desktop apps do not require Google app verification.
-5. **Create Credentials**:
-   - Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**.
-   - Application type: **Desktop app**.
-   - Name it (e.g., `waybar-ycal-desktop`).
-   - Download the JSON credentials file directly from the creation confirmation dialog.
-6. **Install Credentials**:
-   - Save the downloaded file as:
-     ```bash
-     ~/.config/waybar-ycal/credentials.json
-     ```
-   - An example template is provided in `credentials.json.example`.
+4. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**:
+   - Application type: **Desktop app**
+   - **Download the JSON file** from the confirmation dialog (this is only available at creation time).
+5. Go to **APIs & Services → OAuth consent screen → Audience** and set publishing status to **In production**:
+   - No verification is required for personal use — Google only requires review for sensitive/restricted public scopes, which this app does not use.
+6. Place the downloaded file at:
+   ```bash
+   ~/.config/waybar-ycal/credentials.json
+   ```
+   *(A template is also available in `credentials.json.example`)*
 
 ### First-Time Authentication
 
-When running for the first time:
-- The daemon detects that OAuth authorization is needed and launches your default web browser.
-- Log in and grant read/write access to Google Calendar and Google Tasks.
-- The authorization token is saved securely to `~/.cache/waybar-ycal/token.json` and automatically refreshed in the background.
+Click the bar module or launch the background manager. The app will detect that you haven't authenticated yet and open your default browser:
+1. Log in to your Google Account.
+2. Grant read/write access to Calendar and Tasks.
+3. The OAuth token is saved securely to `~/.cache/waybar-ycal/tokens/` and refreshed silently in the background.
 
 ---
 
-## Architecture & Components
+## Multiple Google Accounts (Personal + Company)
 
-| Component | File | Role |
-|-----------|------|------|
-| **Background Dashboard** | `bg.py` | Full-screen Hyprland bottom layer window rendering calendar, today's schedule, and categorized task panels with real-time editing and creation. |
-| **Waybar Popup** | `popup.py` | Top layer popup widget displaying calendar grid, event badges, and interactive task toggles. |
-| **Waybar Bar Module** | `bar.py` | Outputs formatted JSON with date, active events, and Nerd Font icons for Waybar. |
-| **Waybar Toggle** | `toggle.sh` | Sends `SIGUSR1` to toggle the popup visibility. |
-| **Theme Switcher** | `switch-theme.sh` | Switches active color palette for the background dashboard or both Waybar and dashboard using `--all`. |
+hypr-ycal natively supports managing multiple Google accounts simultaneously:
+- **Combined Calendars**: View personal and work events on the same month grid and day agenda.
+- **Combined Kanban Boards**: Manage Google Tasks lists from both personal and company accounts side by side.
+- **Account Separation & Toggles**: Enable, disable, or filter calendars per account at any time.
+
+### Method 1: Using the Desktop UI
+1. Click the top-bar status pill `[ 📅 Calendars ]` or click **Calendars** in the month navigation bar.
+2. Click **[ + Add Google Account (Personal / Company) ]**.
+3. Enter an account label (e.g., `Company` or `Work`).
+4. Click **[ 🌐 Sign In in Browser ]**.
+5. Select and authorize your company Google account.
+
+### Method 2: Using the CLI Helper
+You can also connect and manage accounts directly from the terminal:
+
+```bash
+# Add a new account (opens browser with account chooser)
+~/.config/waybar-ycal/add-account.sh --name "Company"
+
+# If your company Google Workspace requires its own OAuth Client ID:
+~/.config/waybar-ycal/add-account.sh --name "Company" --credentials /path/to/client_secret_company.json
+
+# List all connected accounts
+~/.config/waybar-ycal/add-account.sh --list
+
+# Temporarily toggle/pause an account
+~/.config/waybar-ycal/add-account.sh --toggle ataparlar_company_com
+
+# Remove an account
+~/.config/waybar-ycal/add-account.sh --remove ataparlar_company_com
+```
+
+---
+
+## Installation
+
+### Dependencies
+
+Ensure the following packages are installed on your system:
+
+**Arch Linux:**
+```bash
+sudo pacman -S python-gobject gtk4 gtk4-layer-shell \
+    python-google-auth python-google-auth-oauthlib python-google-api-python-client
+```
+
+**Ubuntu / Debian:**
+```bash
+sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 \
+    python3-google-auth python3-google-auth-oauthlib
+pip install --user google-api-python-client
+```
+*(Note: `gtk4-layer-shell` is required for Wayland layer rendering and may need to be built from source on some distributions).*
+
+**Fonts:**
+A [Nerd Font](https://www.nerdfonts.com/) (e.g., JetBrainsMono Nerd Font) is recommended for icons.
+
+### Quick Install
+
+Clone this repository and run the installer script:
+
+```bash
+git clone https://github.com/ataparlar/hypr-ycal.git
+cd hypr-ycal
+./install.sh
+```
+
+The installer:
+- Copies scripts and themes to `~/.config/waybar-ycal/`
+- Installs systemd user services to `~/.config/systemd/user/`
+- Reloads systemd daemon
 
 ---
 
 ## Systemd User Services
 
-Both the Waybar popup and the background desktop manager run as systemd user units:
+Manage the background dashboard and popup daemon via systemd:
 
 ```bash
-# Enable and start popup daemon
+# Enable and start services
 systemctl --user enable --now waybar-ycal.service
-
-# Enable and start background dashboard
 systemctl --user enable --now waybar-ycal-bg.service
-```
 
-Status check:
-```bash
+# Check status
 systemctl --user status waybar-ycal waybar-ycal-bg
 ```
 
 ---
 
-## Theming
+## Waybar Configuration
 
-Themes are JSON definitions stored in `themes/`. Current built-in themes:
-- `dark-pastel-grey-green` (Default matte palette)
-- `neutral-grey`
-- `catppuccin-mocha`
-
-### Switching Themes
-
-```bash
-# Switch desktop background only
-~/.config/waybar-ycal/switch-theme.sh dark-pastel-grey-green
-
-# Switch both Waybar and desktop background synchronously
-~/.config/waybar-ycal/switch-theme.sh --all dark-pastel-grey-green
-```
-
----
-
-## Waybar Integration
-
-Add to `~/.config/waybar/config.jsonc`:
+Add the module definition to your `~/.config/waybar/config.jsonc`:
 
 ```jsonc
 "custom/ycal": {
@@ -104,11 +153,59 @@ Add to `~/.config/waybar/config.jsonc`:
 }
 ```
 
-Include `"custom/ycal"` in your `modules-center` or desired position.
+Add `"custom/ycal"` to your `modules-center` (or `modules-right`):
+
+```jsonc
+"modules-center": ["custom/ycal"]
+```
 
 ---
 
-## Credits & Upstream
+## Theming & Customization
 
-- Originally inspired by and built on top of [waybar-ycal](https://github.com/yagybaba/waybar-ycal) by [yagybaba](https://github.com/yagybaba).
-- Extended with full-screen Hyprland layer-shell background task manager, multi-list task organization, inline task creation, and synchronized matte theme engine.
+Themes are defined as JSON files in `themes/`:
+- `dark-pastel-grey-green` (Default: matte pastel dark theme)
+- `neutral-grey` (Minimalist neutral palette)
+- `catppuccin-mocha` (Popular pastel theme)
+
+### Theme Switcher
+
+Use `switch-theme.sh` to switch themes on the fly without restarting:
+
+```bash
+# Switch desktop background theme
+~/.config/waybar-ycal/switch-theme.sh dark-pastel-grey-green
+
+# Switch both desktop background and Waybar synchronously
+~/.config/waybar-ycal/switch-theme.sh --all dark-pastel-grey-green
+```
+
+---
+
+## Architecture
+
+| File | Description |
+|------|-------------|
+| `bg.py` | Full-screen Hyprland layer-shell background calendar & tasks dashboard |
+| `popup.py` | Wayland top-layer calendar popup daemon |
+| `accounts.py` | Multi-account OAuth2 manager and token lifecycle handler |
+| `add-account.py` | CLI tool to add, list, toggle, or remove Google accounts |
+| `add-account.sh` | Shell shortcut for `add-account.py` |
+| `bar.py` | Waybar custom module returning JSON with glyphs and date info |
+| `toggle.sh` | Shell script to send SIGUSR1 to toggle the popup window |
+| `switch-theme.sh` | Theme switcher script supporting `--all` synchronizer |
+| `waybar-ycal-bg.service` | Systemd user unit for background dashboard |
+| `waybar-ycal.service` | Systemd user unit for Waybar popup daemon |
+
+---
+
+## Credits
+
+- **Original Project**: Built upon and inspired by [waybar-ycal](https://github.com/yagybaba/waybar-ycal) created by [yagybaba](https://github.com/yagybaba).
+- **Extended by Ata Parlar**: Added full-screen interactive desktop background dashboard, multi-list Google Tasks kanban organization, inline task creation & editing, layer-shell integration, and synchronized theme engine.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
