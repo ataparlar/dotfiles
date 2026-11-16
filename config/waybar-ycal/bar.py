@@ -15,21 +15,23 @@ def load_config():
             pass
     return {}
 
-def load_events():
+def load_cache():
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE) as f:
                 data = json.load(f)
-                if isinstance(data, dict) and "events" in data:
-                    return data["events"]
-                return data
+                if isinstance(data, dict):
+                    return data
         except Exception:
             pass
     return {}
 
 now = datetime.datetime.now()
 today = now.date()
-events = load_events()
+cache_data = load_cache()
+events = cache_data.get("events", cache_data) if "events" in cache_data else cache_data
+cached_accounts = cache_data.get("accounts", []) if isinstance(cache_data, dict) else []
+expired_names = [a.get("name", a.get("email", "Account")) for a in cached_accounts if isinstance(a, dict) and a.get("needs_reauth")]
 config = load_config()
 vis_cals = config.get('visible_calendars')
 show_tasks = config.get('show_tasks_on_calendar', True)
@@ -47,6 +49,8 @@ for it in raw_today_items:
         today_items.append(it)
 
 tooltip_lines = [f"📅 {now.strftime('%A, %d %B %Y')}"]
+if expired_names:
+    tooltip_lines.append(f"⚠ Reconnect needed: {', '.join(expired_names)}")
 if today_items:
     tooltip_lines.append("")
     for it in today_items:
@@ -61,10 +65,17 @@ if today_items:
 else:
     tooltip_lines.append("No events or tasks scheduled for today")
 
+classes = []
+if today_items:
+    classes.append("has-events")
+if expired_names:
+    classes.append("expired")
+
+prefix = "⚠ " if expired_names else ""
 output = {
-    "text": f"\U000f00ed  {now.strftime('%A %H:%M')}",
+    "text": f"{prefix}\U000f00ed  {now.strftime('%A %H:%M')}",
     "tooltip": "\n".join(tooltip_lines),
-    "class": "has-events" if today_items else ""
+    "class": " ".join(classes),
 }
 
 print(json.dumps(output))

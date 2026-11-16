@@ -30,6 +30,7 @@ from popup import (
     hex_to_rgba,
     load_data,
     load_calendars,
+    load_cached_accounts,
     load_events,
     NERD_FONT,
     SCOPES,
@@ -43,6 +44,7 @@ from accounts import (
     get_account,
     get_credentials_for_account,
     add_account_interactive,
+    reconnect_account,
     remove_account,
     toggle_account,
     DEFAULT_CREDENTIALS_FILE,
@@ -221,6 +223,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.selected_date = self.today
         self.events, self.task_lists, self.calendars = load_data()
         self.accounts = load_accounts()
+        self.cached_accounts = load_cached_accounts()
         self.current_theme = load_theme()
         self.config = load_config()
         self.cal_width = self._calc_calendar_width()
@@ -489,6 +492,27 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.clock_lbl.set_markup(f"<b>{now.strftime('%H:%M:%S')}</b>")
         return True
 
+    def _get_account_status_map(self):
+        """Map account id and email to cached sync status metadata."""
+        status_map = {}
+        for ca in getattr(self, 'cached_accounts', []):
+            if not isinstance(ca, dict):
+                continue
+            if ca.get('id'):
+                status_map[ca['id']] = ca
+            if ca.get('email'):
+                status_map[ca['email']] = ca
+        return status_map
+
+    def _handle_missing_creds(self):
+        """Sync account status and open the Calendars & Accounts dialog when auth expired."""
+        _run_sync()
+        def show():
+            self.app.reload_all_windows()
+            self.open_calendars_dialog()
+            return False
+        GLib.idle_add(show)
+
     def _update_stats_pills(self):
         today_iso = datetime.date.today().isoformat()
         today_items = self.events.get(today_iso, [])
@@ -513,13 +537,34 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         self.pending_pill.set_markup(f"<b>📋 {total_pending}</b> Pending")
         self.lists_pill.set_markup(f"<b>📁 {lists_count}</b> Lists")
         if hasattr(self, 'cals_pill_label'):
-            acc_count = len(getattr(self, 'accounts', []))
-            if acc_count > 1:
-                self.cals_pill_label.set_markup(f"<b>📅 {active_cals}/{total_cals}</b> Cals <span alpha='75%' size='smaller'>({acc_count} Accounts)</span>")
-                self.cals_pill.set_tooltip_text(f"Manage Google Calendars & Accounts ({acc_count} connected)")
+            accs = getattr(self, 'accounts', [])
+            acc_count = len(accs)
+            status_map = self._get_account_status_map()
+            expired_accs = [
+                a for a in accs
+                if a.get('enabled', True)
+                and (status_map.get(a.get('id')) or status_map.get(a.get('email')) or {}).get('needs_reauth')
+            ]
+            if expired_accs:
+                self.cals_pill.add_css_class('pill-warning')
+                names = ", ".join(a.get('name', a.get('email', 'Account')) for a in expired_accs)
+                self.cals_pill_label.set_markup(
+                    f"<b>📅 {active_cals}/{total_cals}</b> Cals "
+                    f"<span foreground='#f6d32d' weight='bold'>• ⚠ Reconnect</span>"
+                )
+                self.cals_pill.set_tooltip_text(
+                    f"⚠ Session expired (7-day limit): {names}\nClick to reconnect in 1 click"
+                )
             else:
-                self.cals_pill_label.set_markup(f"<b>📅 {active_cals}/{total_cals}</b> Calendars")
-                self.cals_pill.set_tooltip_text("Manage Google Calendars & Accounts")
+                self.cals_pill.remove_css_class('pill-warning')
+                if acc_count > 1:
+                    self.cals_pill_label.set_markup(
+                        f"<b>📅 {active_cals}/{total_cals}</b> Cals <span alpha='75%' size='smaller'>({acc_count} Accounts)</span>"
+                    )
+                    self.cals_pill.set_tooltip_text(f"Manage Google Calendars & Accounts ({acc_count} connected)")
+                else:
+                    self.cals_pill_label.set_markup(f"<b>📅 {active_cals}/{total_cals}</b> Calendars")
+                    self.cals_pill.set_tooltip_text("Manage Google Calendars & Accounts")
 
     def _build_calendar_card(self):
         self.calendar_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1353,6 +1398,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                         break
                 creds = _get_credentials(acc_id)
                 if creds is None:
+                    self._handle_missing_creds()
                     return
                 service = build('tasks', 'v1', credentials=creds)
                 service.tasks().insert(tasklist=lid, body={'title': title}).execute()
@@ -1370,7 +1416,8 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                 from googleapiclient.discovery import build
                 creds = _get_credentials(task.get('account_id'))
                 if creds is None:
-                    return
+                    self._handle_missing_creds()
+                    raise RuntimeError('Account session expired — please reconnect.')
                 service = build('tasks', 'v1', credentials=creds)
                 new_status = 'needsAction' if task.get('done') else 'completed'
                 service.tasks().patch(
@@ -1817,7 +1864,8 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                             break
                 creds = _get_credentials(acc_id)
                 if creds is None:
-                    return
+                    self._handle_missing_creds()
+                    raise RuntimeError('Account session expired — please reconnect.')
                 service = build('tasks', 'v1', credentials=creds)
 
                 body = {
@@ -1875,7 +1923,8 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                 from googleapiclient.discovery import build
                 creds = _get_credentials(task.get('account_id'))
                 if creds is None:
-                    return
+                    self._handle_missing_creds()
+                    raise RuntimeError('Account session expired — please reconnect.')
                 service = build('tasks', 'v1', credentials=creds)
                 service.tasks().delete(tasklist=task['lid'], task=task['id']).execute()
                 _run_sync()
@@ -1996,7 +2045,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         lbl_info = Gtk.Label()
         lbl_info.set_markup(
             "<span alpha='75%' size='smaller'>"
-            "Sign in with your company or personal Google account.<br/>"
+            "Sign in with your company or personal Google account.\n"
             "Google will open in your browser to authorize Calendar &amp; Tasks."
             "</span>"
         )
@@ -2071,17 +2120,18 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                     new_acc = add_account_interactive(
                         name=acc_name,
                         credentials_file=custom_cred,
-                        prompt='select_account',
+                        prompt='select_account consent',
                     )
                     _run_sync()
 
                     def on_success():
                         auth_btn.remove_css_class('pulsing')
                         auth_btn.set_sensitive(True)
-                        status_lbl.set_markup(f"<span foreground='#2ec27e'>✓ Added {html.escape(new_acc.get('name', 'Account'))} &lt;{html.escape(new_acc.get('email', ''))}&gt;!</span>")
-                        self.accounts = load_accounts()
-                        self.reload_data()
-                        GLib.timeout_add(1500, lambda: self._populate_calendars_dialog())
+                        status_lbl.set_markup(
+                            f"<span foreground='#2ec27e'>✓ Connected {html.escape(new_acc.get('name', 'Account'))} &lt;{html.escape(new_acc.get('email', ''))}&gt;!</span>"
+                        )
+                        self.app.reload_all_windows()
+                        GLib.timeout_add(1200, lambda: self._populate_calendars_dialog() and False)
                         return False
                     GLib.idle_add(on_success)
                 except Exception as ex:
@@ -2098,6 +2148,18 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
 
         return container
 
+    def _sync_and_refresh_dialog(self):
+        """Run sync in a background thread and refresh all windows and the calendars dialog."""
+        def work():
+            _run_sync()
+            def after():
+                self.app.reload_all_windows()
+                if hasattr(self, 'cal_dialog_scrim') and self.cal_dialog_scrim.get_visible():
+                    self._populate_calendars_dialog()
+                return False
+            GLib.idle_add(after)
+        threading.Thread(target=work, daemon=True).start()
+
     def _populate_calendars_dialog(self):
         while True:
             child = self.cal_dialog_content.get_first_child()
@@ -2106,6 +2168,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
             self.cal_dialog_content.remove(child)
 
         accounts = load_accounts()
+        status_map = self._get_account_status_map()
         all_cals = getattr(self, 'calendars', [])
 
         # Add Account Section at top
@@ -2120,11 +2183,16 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                 acc_email = acc.get('email', '')
                 acc_color = acc.get('color', '#4285f4')
                 is_enabled = acc.get('enabled', True)
+                acc_st = status_map.get(acc_id) or status_map.get(acc_email) or {}
+                needs_reauth = bool(is_enabled and acc_st.get('needs_reauth'))
+                is_stale_err = bool(is_enabled and not needs_reauth and acc_st.get('status') == 'error')
 
                 # Account Header Banner
                 acc_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
                 acc_hdr.set_margin_top(10)
                 acc_hdr.add_css_class('account-banner')
+                if needs_reauth:
+                    acc_hdr.add_css_class('account-banner-expired')
 
                 avatar = Gtk.Label()
                 icon_str = "🏢" if any(w in acc_name.lower() or w in acc_email.lower() for w in ['company', 'work', 'corp', 'office']) else "👤"
@@ -2144,19 +2212,73 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
 
                 title_box.append(acc_title_lbl)
                 title_box.append(acc_email_lbl)
+
+                status_note_lbl = None
+                if needs_reauth:
+                    status_note_lbl = Gtk.Label()
+                    status_note_lbl.set_markup(
+                        "<span foreground='#f66151' size='smaller'><b>⚠ Session expired (7-day Testing limit) — click Reconnect</b></span>"
+                    )
+                    status_note_lbl.set_halign(Gtk.Align.START)
+                    title_box.append(status_note_lbl)
+                elif is_stale_err:
+                    status_note_lbl = Gtk.Label()
+                    status_note_lbl.set_markup(
+                        "<span foreground='#e5a50a' size='smaller'>⚠ Sync issue — showing cached data</span>"
+                    )
+                    status_note_lbl.set_halign(Gtk.Align.START)
+                    title_box.append(status_note_lbl)
+
                 acc_hdr.append(title_box)
+
+                # 1-Click Reconnect button when Testing token expires (or offer subtle Reauth)
+                if needs_reauth:
+                    reconn_btn = Gtk.Button(label="🔄 Reconnect")
+                    reconn_btn.add_css_class('reconnect-btn')
+                    reconn_btn.set_tooltip_text(f"Re-authorize {acc_email} in browser")
+
+                    def on_reconnect_acc(btn, aid=acc_id, note_lbl=status_note_lbl):
+                        btn.set_sensitive(False)
+                        btn.add_css_class('pulsing')
+                        btn.set_label("Authorizing...")
+                        if note_lbl is not None:
+                            note_lbl.set_markup("<span foreground='#3584e4' size='smaller'>Browser opened — approve Google Calendar &amp; Tasks access...</span>")
+
+                        def work():
+                            try:
+                                reconnect_account(aid)
+                                _run_sync()
+                                def ok():
+                                    self.app.reload_all_windows()
+                                    if hasattr(self, 'cal_dialog_scrim') and self.cal_dialog_scrim.get_visible():
+                                        self._populate_calendars_dialog()
+                                    return False
+                                GLib.idle_add(ok)
+                            except Exception as ex:
+                                def err():
+                                    btn.remove_css_class('pulsing')
+                                    btn.set_sensitive(True)
+                                    btn.set_label("🔄 Reconnect")
+                                    if note_lbl is not None:
+                                        note_lbl.set_markup(f"<span foreground='#f66151' size='smaller'>✕ {html.escape(str(ex))}</span>")
+                                    return False
+                                GLib.idle_add(err)
+
+                        threading.Thread(target=work, daemon=True).start()
+
+                    reconn_btn.connect("clicked", on_reconnect_acc)
+                    acc_hdr.append(reconn_btn)
 
                 # Account toggle button
                 toggle_btn = Gtk.Button(label="Enabled" if is_enabled else "Paused")
                 toggle_btn.add_css_class('pill-btn')
                 if not is_enabled:
                     toggle_btn.add_css_class('account-paused-btn')
-                def on_toggle_acc(*_, aid=acc_id):
+                def on_toggle_acc(btn, aid=acc_id):
+                    btn.set_sensitive(False)
                     toggle_account(aid)
                     self.accounts = load_accounts()
-                    _run_sync()
-                    self.reload_data()
-                    self._populate_calendars_dialog()
+                    self._sync_and_refresh_dialog()
                 toggle_btn.connect("clicked", on_toggle_acc)
                 acc_hdr.append(toggle_btn)
 
@@ -2165,12 +2287,11 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                     remove_btn = Gtk.Button(label="Remove")
                     remove_btn.add_css_class('pill-btn')
                     remove_btn.add_css_class('remove-btn')
-                    def on_remove_acc(*_, aid=acc_id):
+                    def on_remove_acc(btn, aid=acc_id):
+                        btn.set_sensitive(False)
                         if remove_account(aid):
                             self.accounts = load_accounts()
-                            _run_sync()
-                            self.reload_data()
-                            self._populate_calendars_dialog()
+                            self._sync_and_refresh_dialog()
                     remove_btn.connect("clicked", on_remove_acc)
                     acc_hdr.append(remove_btn)
 
@@ -2182,7 +2303,12 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
                     for cal in acc_cals:
                         self.cal_dialog_content.append(self._make_calendar_dialog_row(cal))
                 else:
-                    empty_acc = Gtk.Label(label="No calendars found in this account")
+                    msg = (
+                        "Session expired — click Reconnect above to load calendars"
+                        if needs_reauth
+                        else "No calendars found in this account"
+                    )
+                    empty_acc = Gtk.Label(label=msg)
                     empty_acc.add_css_class('no-events')
                     empty_acc.set_halign(Gtk.Align.START)
                     empty_acc.set_margin_start(16)
@@ -2352,6 +2478,7 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
         """Reload events, task lists, and calendars from disk cache and re-render."""
         self.events, self.task_lists, self.calendars = load_data()
         self.accounts = load_accounts()
+        self.cached_accounts = load_cached_accounts()
         self.current_theme = load_theme()
         self._update_clock()
         self._update_stats_pills()
@@ -2489,6 +2616,14 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
           background: rgba(148, 186, 166, 0.28);
           border-color: rgba(148, 186, 166, 0.55);
       }}
+      .pill-warning {{
+          border: 1px solid rgba(229, 165, 10, 0.55);
+          background: rgba(229, 165, 10, 0.16);
+      }}
+      .pill-warning:hover {{
+          background: rgba(229, 165, 10, 0.28);
+          border-color: rgba(246, 211, 45, 0.75);
+      }}
       .cal-chip {{
           border: 1px solid rgba(255, 255, 255, 0.10);
           background: rgba(255, 255, 255, 0.05);
@@ -2525,12 +2660,29 @@ class DesktopBackgroundWindow(Gtk.ApplicationWindow):
           margin-top: 10px;
           margin-bottom: 2px;
       }}
+      .account-banner-expired {{
+          background: rgba(246, 97, 81, 0.10);
+          border-left: 3px solid #f66151;
+      }}
+      .reconnect-btn {{
+          background: rgba(229, 165, 10, 0.22);
+          border: 1px solid rgba(246, 211, 45, 0.50);
+          border-radius: 8px;
+          color: #f6d32d;
+          padding: 4px 10px;
+          font-size: 11px;
+          font-weight: 600;
+      }}
+      .reconnect-btn:hover {{
+          background: rgba(229, 165, 10, 0.36);
+          border-color: rgba(246, 211, 45, 0.80);
+      }}
       .account-paused-btn {{
           opacity: 0.5;
       }}
       .remove-btn:hover {{
-          color: #e01b24 !important;
-          border-color: rgba(224, 27, 36, 0.4) !important;
+          color: #e01b24;
+          border-color: rgba(224, 27, 36, 0.4);
       }}
       .add-account-container {{
           padding: 2px 0 8px 0;

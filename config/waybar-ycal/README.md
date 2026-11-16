@@ -73,8 +73,11 @@ You can also connect and manage accounts directly from the terminal:
 # If your company Google Workspace requires its own OAuth Client ID:
 ~/.config/waybar-ycal/add-account.sh --name "Company" --credentials /path/to/client_secret_company.json
 
-# List all connected accounts
+# List all connected accounts (shows EXPIRED if a Testing-mode token needs re-auth)
 ~/.config/waybar-ycal/add-account.sh --list
+
+# Re-authenticate an expired account (or use the 1-click Reconnect button in the UI)
+~/.config/waybar-ycal/add-account.sh --reconnect ataparlar_gmail_com
 
 # Temporarily toggle/pause an account
 ~/.config/waybar-ycal/add-account.sh --toggle ataparlar_company_com

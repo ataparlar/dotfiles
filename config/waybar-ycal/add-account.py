@@ -17,6 +17,8 @@ from accounts import (
     load_accounts,
     save_accounts,
     add_account_interactive,
+    reconnect_account,
+    get_credentials_with_status,
     remove_account,
     toggle_account,
     rename_account,
@@ -36,11 +38,22 @@ def list_accounts():
         return
 
     for idx, a in enumerate(accounts, 1):
-        status = "✓ ENABLED " if a.get('enabled', True) else "✕ DISABLED"
+        if not a.get('enabled', True):
+            status = "✕ DISABLED"
+        else:
+            creds, err_kind, _ = get_credentials_with_status(a)
+            if creds:
+                status = "✓ ENABLED "
+            elif err_kind == 'auth_expired':
+                status = "⚠ EXPIRED "
+            else:
+                status = "! ERROR   "
         color_dot = a.get('color', '#4285f4')
         print(f"  [{idx}] {status}  {a.get('name', 'Account'):<16} <{a.get('email')}>")
         print(f"      ID: {a.get('id')} | Color: {color_dot}")
         print(f"      Token: {a.get('token_file')}")
+        if status.startswith("⚠"):
+            print(f"      Action: run '{sys.argv[0]} --reconnect {a.get('id')}' or click Reconnect in UI")
         if a.get('credentials_file') != DEFAULT_CREDENTIALS_FILE:
             print(f"      Credentials: {a.get('credentials_file')}")
     print("=" * 60)
@@ -101,6 +114,11 @@ def main():
         help="Toggle enabled/disabled status of an account"
     )
     parser.add_argument(
+        '--reconnect',
+        metavar='ACCOUNT_ID',
+        help="Re-authenticate an existing expired account (by ID or email)"
+    )
+    parser.add_argument(
         '--sync-only',
         action='store_true',
         help="Run sync now and reload services"
@@ -114,6 +132,17 @@ def main():
 
     if args.sync_only:
         trigger_sync_and_reload()
+        return
+
+    if args.reconnect:
+        try:
+            acc = reconnect_account(args.reconnect)
+            print(f"[✓] Reconnected {acc.get('name')} <{acc.get('email')}>!")
+            trigger_sync_and_reload()
+            list_accounts()
+        except Exception as e:
+            print(f"[✕] Reconnect failed: {e}")
+            sys.exit(1)
         return
 
     if args.remove:
@@ -169,7 +198,7 @@ def main():
         acc = add_account_interactive(
             name=name,
             credentials_file=cred_file,
-            prompt='select_account',
+            prompt='select_account consent',
         )
         print("-" * 60)
         print(f"[✓] SUCCESS! Added account: {acc.get('name')} <{acc.get('email')}>")

@@ -131,21 +131,49 @@ def get_account(account_id_or_email: str) -> Optional[Dict]:
     return None
 
 
-def get_credentials_for_account(account_or_id) -> Optional[object]:
+def _is_auth_grant_error(err: Exception) -> bool:
+    """Return True if err indicates an expired, revoked, or invalid OAuth grant."""
+    try:
+        from google.auth.exceptions import RefreshError
+        if isinstance(err, RefreshError):
+            msg = str(err).lower()
+            if any(k in msg for k in (
+                'invalid_grant',
+                'expired or revoked',
+                'revoked',
+                'invalid_client',
+                'unauthorized',
+                'deleted_client',
+            )):
+                return True
+    except Exception:
+        pass
+    msg = str(err).lower()
+    return any(k in msg for k in (
+        'invalid_grant',
+        'expired or revoked',
+        'token has been revoked',
+        'invalid_client',
+        'deleted_client',
+    ))
+
+
+def get_credentials_with_status(account_or_id) -> Tuple[Optional[object], Optional[str], Optional[str]]:
     """
-    Get valid google.oauth2.credentials.Credentials for a given account dict or id.
-    Refreshes expired credentials if refresh_token is available.
+    Get valid Credentials and error classification for an account.
+    Returns (creds, error_kind, error_message) where error_kind is None,
+    'auth_expired', or 'error'.
     """
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
 
     account = account_or_id if isinstance(account_or_id, dict) else get_account(account_or_id)
     if not account:
-        return None
+        return None, 'error', 'Account configuration not found.'
 
     token_file = account.get('token_file')
     if not token_file or not os.path.exists(token_file):
-        return None
+        return None, 'auth_expired', 'Not signed in (missing token file).'
 
     try:
         creds = Credentials.from_authorized_user_file(token_file, SCOPES)
@@ -154,7 +182,7 @@ def get_credentials_for_account(account_or_id) -> Optional[object]:
                 creds.refresh(Request())
                 with open(token_file, 'w', encoding='utf-8') as f:
                     f.write(creds.to_json())
-                # Also keep legacy token.json in sync if this is the first / personal account
+                # Keep legacy token.json in sync if this is the first / primary account
                 accounts = load_accounts()
                 if accounts and accounts[0].get('id') == account.get('id'):
                     try:
@@ -163,12 +191,23 @@ def get_credentials_for_account(account_or_id) -> Optional[object]:
                     except Exception:
                         pass
             else:
-                print(f"[accounts] Credentials for {account.get('email')} are invalid and cannot be refreshed.", file=sys.stderr)
-                return None
-        return creds
+                msg = 'Credentials are invalid and have no refresh token.'
+                print(f"[accounts] {account.get('email')}: {msg}", file=sys.stderr)
+                return None, 'auth_expired', msg
+        return creds, None, None
     except Exception as e:
         print(f"[accounts] Error loading credentials for {account.get('email', '?')}: {e}", file=sys.stderr)
-        return None
+        kind = 'auth_expired' if _is_auth_grant_error(e) else 'error'
+        return None, kind, str(e)
+
+
+def get_credentials_for_account(account_or_id) -> Optional[object]:
+    """
+    Get valid google.oauth2.credentials.Credentials for a given account dict or id.
+    Refreshes expired credentials if refresh_token is available.
+    """
+    creds, _, _ = get_credentials_with_status(account_or_id)
+    return creds
 
 
 def get_all_active_credentials() -> List[Tuple[Dict, object]]:
@@ -188,12 +227,13 @@ def add_account_interactive(
     credentials_file: Optional[str] = None,
     port: int = 0,
     open_browser: bool = True,
-    prompt: str = 'select_account',
+    prompt: str = 'select_account consent',
+    login_hint: Optional[str] = None,
 ) -> Optional[Dict]:
     """
     Run an interactive OAuth authorization flow in the browser.
-    prompt='select_account' ensures Google asks which account to log into
-    (crucial for switching from personal to company account).
+    prompt='select_account consent' ensures Google asks which account to use
+    and issues a fresh refresh token even on re-authentication.
     """
     from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
@@ -208,7 +248,10 @@ def add_account_interactive(
 
     ensure_dirs()
     flow = InstalledAppFlow.from_client_secrets_file(cred_file, SCOPES)
-    creds = flow.run_local_server(port=port, prompt=prompt, open_browser=open_browser)
+    auth_kwargs = {'port': port, 'prompt': prompt, 'open_browser': open_browser}
+    if login_hint:
+        auth_kwargs['login_hint'] = login_hint
+    creds = flow.run_local_server(**auth_kwargs)
 
     # Detect primary email address
     service = build('calendar', 'v3', credentials=creds)
@@ -222,20 +265,26 @@ def add_account_interactive(
     with open(token_file, 'w', encoding='utf-8') as f:
         f.write(creds.to_json())
 
-    # Determine friendly name
+    # Determine friendly name and preserve existing label/color when re-authenticating
     accounts = load_accounts()
+    existing = next((a for a in accounts if a.get('id') == acc_id or a.get('email') == email), None)
     if not name:
-        domain = email.split('@')[-1].lower() if '@' in email else ''
-        if domain == 'gmail.com':
-            name = "Personal" if not accounts else f"Google ({email.split('@')[0]})"
+        if existing and existing.get('name'):
+            name = existing['name']
         else:
-            org = domain.split('.')[0].capitalize()
-            name = f"{org} (Company)"
+            domain = email.split('@')[-1].lower() if '@' in email else ''
+            if domain == 'gmail.com':
+                name = "Personal" if not accounts else f"Google ({email.split('@')[0]})"
+            else:
+                org = domain.split('.')[0].capitalize()
+                name = f"{org} (Company)"
 
-    # Pick an account color not yet taken if possible
-    used_colors = {a.get('color') for a in accounts}
-    avail_colors = [c for c in ACCOUNT_COLORS if c not in used_colors]
-    chosen_color = avail_colors[0] if avail_colors else ACCOUNT_COLORS[len(accounts) % len(ACCOUNT_COLORS)]
+    if existing and existing.get('color'):
+        chosen_color = existing['color']
+    else:
+        used_colors = {a.get('color') for a in accounts}
+        avail_colors = [c for c in ACCOUNT_COLORS if c not in used_colors]
+        chosen_color = avail_colors[0] if avail_colors else ACCOUNT_COLORS[len(accounts) % len(ACCOUNT_COLORS)]
 
     account_entry = {
         "id": acc_id,
@@ -243,11 +292,10 @@ def add_account_interactive(
         "name": name,
         "token_file": token_file,
         "credentials_file": cred_file,
-        "enabled": True,
+        "enabled": existing.get('enabled', True) if existing else True,
         "color": chosen_color,
     }
 
-    # If updating an existing account, replace; otherwise append
     replaced = False
     for i, a in enumerate(accounts):
         if a.get('id') == acc_id or a.get('email') == email:
@@ -259,14 +307,33 @@ def add_account_interactive(
 
     save_accounts(accounts)
 
-    # Update legacy token.json if this is the only or primary account
-    if len(accounts) == 1:
+    # Keep legacy token.json in sync if this is the primary / first account
+    if accounts and accounts[0].get('id') == acc_id:
         try:
             shutil.copy2(token_file, LEGACY_TOKEN_FILE)
         except Exception:
             pass
 
     return account_entry
+
+
+def reconnect_account(
+    account_id_or_email: str,
+    port: int = 0,
+    open_browser: bool = True,
+) -> Optional[Dict]:
+    """Re-authenticate an existing configured account using its stored settings."""
+    acc = get_account(account_id_or_email)
+    if not acc:
+        raise ValueError(f"Account '{account_id_or_email}' not found.")
+    return add_account_interactive(
+        name=acc.get('name'),
+        credentials_file=acc.get('credentials_file'),
+        port=port,
+        open_browser=open_browser,
+        prompt='select_account consent',
+        login_hint=acc.get('email'),
+    )
 
 
 def remove_account(account_id: str) -> bool:

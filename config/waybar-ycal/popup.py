@@ -9,6 +9,7 @@ gi.require_version("PangoCairo", "1.0")
 from gi.repository import Gtk, Gio, GLib, Gtk4LayerShell, Pango, PangoCairo
 import calendar
 import datetime
+import fcntl
 import html
 import json
 import math
@@ -17,15 +18,19 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import tomllib
 
 CACHE_FILE = os.path.expanduser('~/.cache/waybar-ycal/events.json')
+SYNC_LOCK_FILE = os.path.expanduser('~/.cache/waybar-ycal/.sync.lock')
 PID_FILE = os.path.expanduser('~/.cache/waybar-ycal/popup.pid')
 THEME_FILE = os.path.expanduser('~/.config/omarchy/current/theme/colors.toml')
 CREDENTIALS_FILE = os.path.expanduser('~/.config/waybar-ycal/credentials.json')
 TOKEN_FILE = os.path.expanduser('~/.cache/waybar-ycal/token.json')
 SYNC_INTERVAL_SEC = 15 * 60  # 15 minutes
+
+_SYNC_THREAD_LOCK = threading.Lock()
 
 # Nerd Font family used for icon buttons (refresh + edit).
 NERD_FONT = "JetBrainsMonoNL Nerd Font, JetBrainsMono Nerd Font, Symbols Nerd Font"
@@ -35,6 +40,7 @@ from accounts import (
     load_accounts,
     get_account,
     get_credentials_for_account,
+    get_credentials_with_status,
     get_all_active_credentials,
     DEFAULT_CREDENTIALS_FILE,
     LEGACY_TOKEN_FILE,
@@ -44,10 +50,8 @@ from accounts import (
 
 def _get_credentials(account_id=None):
     """Get valid credentials for account_id or the default active account."""
-    if account_id:
-        creds = get_credentials_for_account(account_id)
-        if creds:
-            return creds
+    if account_id is not None:
+        return get_credentials_for_account(account_id)
 
     accounts = load_accounts()
     for acc in accounts:
@@ -72,11 +76,116 @@ def _get_credentials(account_id=None):
     return None
 
 
+def _matches_account(item, acc_id, acc_email):
+    """Return True if a cached calendar, event, or task list belongs to the account."""
+    item_acc_id = item.get('account_id')
+    item_email = item.get('account_email')
+    if acc_id and item_acc_id == acc_id:
+        return True
+    if acc_email and item_email == acc_email:
+        return True
+    return False
+
+
+def _preserve_cached_calendars_and_events(prev_cache, acc_id, acc_email, unified_calendars, unified_events_by_date):
+    """Copy previously cached calendars and events for an account so UI doesn't wipe them on error/expiry."""
+    kept = False
+    for c in prev_cache.get('calendars', []):
+        if isinstance(c, dict) and _matches_account(c, acc_id, acc_email):
+            cached_cal = dict(c)
+            cached_cal['stale'] = True
+            unified_calendars.append(cached_cal)
+            kept = True
+
+    for date_key, items in prev_cache.get('events', {}).items():
+        if not isinstance(items, list):
+            continue
+        for ev in items:
+            if isinstance(ev, dict) and ev.get('type') == 'event' and _matches_account(ev, acc_id, acc_email):
+                unified_events_by_date.setdefault(date_key, []).append(ev)
+                kept = True
+    return kept
+
+
+def _preserve_cached_tasks(prev_cache, acc_id, acc_email, unified_task_lists, unified_events_by_date):
+    """Copy previously cached task lists and re-index due tasks for an account."""
+    kept = False
+
+    def index_due_tasks(tasks):
+        for t in tasks:
+            if isinstance(t, dict):
+                if t.get('due'):
+                    unified_events_by_date.setdefault(t['due'], []).append(t)
+                index_due_tasks(t.get('subtasks', []))
+
+    for tl in prev_cache.get('task_lists', []):
+        if isinstance(tl, dict) and _matches_account(tl, acc_id, acc_email):
+            cached_tl = dict(tl)
+            cached_tl['stale'] = True
+            unified_task_lists.append(cached_tl)
+            index_due_tasks(cached_tl.get('tasks', []))
+            kept = True
+    return kept
+
+
+def _is_api_auth_error(err):
+    """Return True if an API call failed due to revoked/expired auth rather than offline/transient error."""
+    status = getattr(getattr(err, 'resp', None), 'status', None)
+    if status == 401:
+        return True
+    msg = str(err).lower()
+    return any(k in msg for k in ('invalid_grant', 'invalid credentials', 'unauthenticated', 'expired or revoked'))
+
+
+def _write_cache_atomic(cache_data):
+    """Atomically write cache JSON using a unique temp file to prevent multi-process races."""
+    cache_dir = os.path.dirname(CACHE_FILE)
+    os.makedirs(cache_dir, exist_ok=True)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            encoding='utf-8',
+            dir=cache_dir,
+            prefix='events.',
+            suffix='.tmp',
+            delete=False,
+        ) as f:
+            tmp_path = f.name
+            json.dump(cache_data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CACHE_FILE)
+    except Exception:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        raise
+
+
 def _run_sync():
     """Fetch events from Google Calendar and Google Tasks across all enabled accounts, write to cache. Runs in a thread."""
+    with _SYNC_THREAD_LOCK:
+        cache_dir = os.path.dirname(CACHE_FILE)
+        os.makedirs(cache_dir, exist_ok=True)
+        try:
+            with open(SYNC_LOCK_FILE, 'w') as lock_f:
+                fcntl.flock(lock_f, fcntl.LOCK_EX)
+                try:
+                    _run_sync_locked()
+                finally:
+                    fcntl.flock(lock_f, fcntl.LOCK_UN)
+        except Exception as e:
+            print(f'[gcal sync error] {e}', file=sys.stderr)
+
+
+def _run_sync_locked():
+    """Locked implementation of multi-account sync."""
     try:
         from googleapiclient.discovery import build
-        from accounts import load_accounts, get_credentials_for_account, ensure_dirs
+        from accounts import load_accounts, ensure_dirs
 
         ensure_dirs()
         accounts = load_accounts()
@@ -87,6 +196,16 @@ def _run_sync():
             accounts = load_accounts()
             if not accounts:
                 return
+
+        prev_cache = {}
+        if os.path.exists(CACHE_FILE):
+            try:
+                with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        prev_cache = loaded
+            except Exception:
+                prev_cache = {}
 
         today = datetime.date.today()
         # Fetch from 1 year past to 2 years future to cover academic calendars, deadlines, and events
@@ -106,24 +225,38 @@ def _run_sync():
             acc_name = acc.get('name', 'Google Account')
             acc_email = acc.get('email', '')
             acc_color = acc.get('color', '#4285f4')
-            accounts_data.append({
-                'id': acc_id,
-                'name': acc_name,
-                'email': acc_email,
-                'color': acc_color,
-                'enabled': True,
-            })
 
-            try:
-                creds = get_credentials_for_account(acc)
-            except Exception as e:
-                print(f"[gcal sync] Error loading credentials for {acc_email}: {e}", file=sys.stderr)
-                continue
+            creds, err_kind, err_msg = get_credentials_with_status(acc)
 
             if not creds:
+                acc_status = 'expired' if err_kind == 'auth_expired' else 'error'
+                _preserve_cached_calendars_and_events(
+                    prev_cache, acc_id, acc_email, unified_calendars, unified_events_by_date
+                )
+                _preserve_cached_tasks(
+                    prev_cache, acc_id, acc_email, unified_task_lists, unified_events_by_date
+                )
+                accounts_data.append({
+                    'id': acc_id,
+                    'name': acc_name,
+                    'email': acc_email,
+                    'color': acc_color,
+                    'enabled': True,
+                    'status': acc_status,
+                    'needs_reauth': (err_kind == 'auth_expired'),
+                    'error': err_msg,
+                    'stale': True,
+                })
                 continue
 
-            # Fetch Calendars
+            acc_status = 'ok'
+            needs_reauth = False
+            acc_error = None
+            stale = False
+
+            # Fetch Calendars into staging containers so failure keeps cached data intact
+            acc_cals = []
+            acc_events_by_date = {}
             try:
                 service = build('calendar', 'v3', credentials=creds)
                 cal_list = service.calendarList().list().execute()
@@ -143,7 +276,7 @@ def _run_sync():
                         'account_email': acc_email,
                         'account_color': acc_color,
                     }
-                    unified_calendars.append(cal_info)
+                    acc_cals.append(cal_info)
 
                     # Fetch Events for this calendar
                     try:
@@ -189,7 +322,7 @@ def _run_sync():
                                 'account_email': acc_email,
                                 'account_color': acc_color,
                             }
-                            unified_events_by_date.setdefault(dt.date().isoformat(), []).append(ev_item)
+                            acc_events_by_date.setdefault(dt.date().isoformat(), []).append(ev_item)
                         elif 'date' in start:
                             d = datetime.date.fromisoformat(start['date'])
                             d_end = datetime.date.fromisoformat(end.get('date', start['date']))
@@ -212,16 +345,32 @@ def _run_sync():
                                 'account_color': acc_color,
                             }
                             if d == d_end:
-                                unified_events_by_date.setdefault(d.isoformat(), []).append(ev_item)
+                                acc_events_by_date.setdefault(d.isoformat(), []).append(ev_item)
                             else:
                                 cur = d
                                 while cur < d_end:
-                                    unified_events_by_date.setdefault(cur.isoformat(), []).append(ev_item)
+                                    acc_events_by_date.setdefault(cur.isoformat(), []).append(ev_item)
                                     cur += datetime.timedelta(days=1)
+
+                unified_calendars.extend(acc_cals)
+                for date_key, ev_list in acc_events_by_date.items():
+                    unified_events_by_date.setdefault(date_key, []).extend(ev_list)
             except Exception as e:
                 print(f"[gcal sync calendar error for account {acc_email}]: {e}", file=sys.stderr)
+                stale = True
+                acc_error = str(e)
+                if _is_api_auth_error(e):
+                    acc_status = 'expired'
+                    needs_reauth = True
+                elif acc_status == 'ok':
+                    acc_status = 'error'
+                _preserve_cached_calendars_and_events(
+                    prev_cache, acc_id, acc_email, unified_calendars, unified_events_by_date
+                )
 
-            # Fetch Google Tasks with subtask hierarchy, due dates, times, and notes
+            # Fetch Google Tasks into staging containers
+            acc_task_lists = []
+            acc_due_tasks = []
             try:
                 tasks_service = build('tasks', 'v1', credentials=creds)
                 task_lists = tasks_service.tasklists().list().execute()
@@ -296,12 +445,11 @@ def _run_sync():
                         else:
                             top_level_tasks.extend(subs)
 
-                    # Add tasks and subtasks with due dates to events_by_date
                     for t_item in task_map.values():
                         if t_item.get('due'):
-                            unified_events_by_date.setdefault(t_item['due'], []).append(t_item)
+                            acc_due_tasks.append((t_item['due'], t_item))
 
-                    unified_task_lists.append({
+                    acc_task_lists.append({
                         'id': tl_id,
                         'title': tl_title,
                         'account_id': acc_id,
@@ -310,8 +458,35 @@ def _run_sync():
                         'account_color': acc_color,
                         'tasks': top_level_tasks,
                     })
+
+                unified_task_lists.extend(acc_task_lists)
+                for due_date, t_item in acc_due_tasks:
+                    unified_events_by_date.setdefault(due_date, []).append(t_item)
             except Exception as e:
                 print(f"[tasks sync error for account {acc_email}]: {e}", file=sys.stderr)
+                stale = True
+                if not acc_error:
+                    acc_error = str(e)
+                if _is_api_auth_error(e):
+                    acc_status = 'expired'
+                    needs_reauth = True
+                elif acc_status == 'ok':
+                    acc_status = 'error'
+                _preserve_cached_tasks(
+                    prev_cache, acc_id, acc_email, unified_task_lists, unified_events_by_date
+                )
+
+            accounts_data.append({
+                'id': acc_id,
+                'name': acc_name,
+                'email': acc_email,
+                'color': acc_color,
+                'enabled': True,
+                'status': acc_status,
+                'needs_reauth': needs_reauth,
+                'error': acc_error,
+                'stale': stale,
+            })
 
         cache_data = {
             'events': unified_events_by_date,
@@ -319,12 +494,7 @@ def _run_sync():
             'calendars': unified_calendars,
             'accounts': accounts_data,
         }
-
-        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
-        tmp = CACHE_FILE + '.tmp'
-        with open(tmp, 'w') as f:
-            json.dump(cache_data, f)
-        os.replace(tmp, CACHE_FILE)
+        _write_cache_atomic(cache_data)
 
     except Exception as e:
         print(f'[gcal sync error] {e}', file=sys.stderr)
@@ -370,28 +540,31 @@ def hex_to_rgba(hex_color, alpha):
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f'rgba({r}, {g}, {b}, {alpha})'
 
-def load_data():
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE) as f:
-                data = json.load(f)
-                if isinstance(data, dict) and 'events' in data:
-                    return data.get('events', {}), data.get('task_lists', []), data.get('calendars', [])
-                return data, [], []
-        except Exception:
-            pass
-    return {}, [], []
-
-def load_calendars():
+def _load_cache_dict():
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE) as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    return data.get('calendars', [])
+                    return data
         except Exception:
             pass
-    return []
+    return {}
+
+def load_data():
+    data = _load_cache_dict()
+    if 'events' in data:
+        return data.get('events', {}), data.get('task_lists', []), data.get('calendars', [])
+    if data:
+        return data, [], []
+    return {}, [], []
+
+def load_calendars():
+    return _load_cache_dict().get('calendars', [])
+
+def load_cached_accounts():
+    """Return cached account runtime statuses (e.g. needs_reauth, error, stale)."""
+    return _load_cache_dict().get('accounts', [])
 
 def load_events():
     events, _, _ = load_data()
@@ -1000,7 +1173,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
                 from googleapiclient.discovery import build
                 creds = _get_credentials(task.get('account_id'))
                 if creds is None:
-                    return
+                    raise RuntimeError('Account session expired — please reconnect.')
                 service = build('tasks', 'v1', credentials=creds)
                 new_status = 'needsAction' if task.get('done') else 'completed'
                 service.tasks().patch(
@@ -1817,7 +1990,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
                             break
                 creds = _get_credentials(acc_id)
                 if creds is None:
-                    return
+                    raise RuntimeError('Account session expired — please reconnect.')
                 service = build('tasks', 'v1', credentials=creds)
 
                 body = {
@@ -1878,7 +2051,7 @@ class CalendarPopup(Gtk.ApplicationWindow):
                 from googleapiclient.discovery import build
                 creds = _get_credentials(task.get('account_id'))
                 if creds is None:
-                    return
+                    raise RuntimeError('Account session expired — please reconnect.')
                 service = build('tasks', 'v1', credentials=creds)
                 service.tasks().delete(tasklist=task['lid'], task=task['id']).execute()
                 _run_sync()
