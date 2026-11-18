@@ -149,6 +149,7 @@ window#waybar.hidden {
 #tray,
 #cpu,
 #memory,
+#custom-gpu,
 #backlight,
 #idle_inhibitor,
 #pulseaudio,
@@ -183,6 +184,7 @@ window#waybar.hidden {
 #idle_inhibitor:hover,
 #cpu:hover,
 #memory:hover,
+#custom-gpu:hover,
 #backlight:hover,
 #pulseaudio:hover,
 #network:hover,
@@ -224,6 +226,24 @@ window#waybar.hidden {
 #memory.critical {
     color: #c97f88;
     background: rgba(201, 127, 136, 0.15);
+}
+
+#custom-gpu {
+    color: #bda6d4;
+}
+
+#custom-gpu.warning {
+    color: #cfb989;
+    background: rgba(207, 185, 137, 0.12);
+}
+
+#custom-gpu.critical {
+    color: #c97f88;
+    background: rgba(201, 127, 136, 0.15);
+}
+
+#custom-gpu.off {
+    color: rgba(216, 222, 218, 0.4);
 }
 
 #pulseaudio {

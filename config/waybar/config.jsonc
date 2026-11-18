@@ -20,6 +20,7 @@
         "tray",
         "cpu",
         "memory",
+        "custom/gpu",
         "idle_inhibitor",
         "backlight",
         "pulseaudio",
@@ -130,6 +131,16 @@
         "interval": 1,
         "tooltip": true,
         "tooltip-format": "Memory Usage: {percentage}%\nUsed: {used:0.2f} GB\nAvailable: {avail:0.2f} GB\nTotal: {total:0.2f} GB"
+    },
+
+    "custom/gpu": {
+        "exec": "/home/ataparlar/.config/waybar/scripts/gpu.py",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 2,
+        "signal": 8,
+        "on-click": "/home/ataparlar/.config/waybar/scripts/gpu.py --toggle",
+        "tooltip": true
     },
 
     "idle_inhibitor": {
